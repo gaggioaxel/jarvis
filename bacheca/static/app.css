@@ -531,6 +531,7 @@ button.tv-task:hover { background: var(--bg); }
 /* Vista Agenti */
 :root {
   --ag-acc-1: #c98a00; --ag-acc-2: #d63638; --ag-acc-3: #0f766e; --ag-gemini: #2563eb;
+  --ag-part-out: #7548d6; --ag-part-write: #0d9488; --ag-part-read: #a3acb9;
   --ag-gem-1: #2563eb; --ag-gem-2: #5b8df5; --ag-gem-3: #1d4ed8;
   --ag-opus: #7548d6; --ag-sonnet: #0d9488; --ag-haiku: #1e9e5a; --ag-fable: #b83280;
   --ag-other: #8a93a3; --ag-neutral: #5b677a;
@@ -538,6 +539,7 @@ button.tv-task:hover { background: var(--bg); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --ag-acc-1: #eab308; --ag-acc-2: #f05656; --ag-acc-3: #2dd4bf; --ag-gemini: #4f8ff7;
+    --ag-part-out: #9b7bf7; --ag-part-write: #2dd4bf; --ag-part-read: #5d6778;
     --ag-gem-1: #4f8ff7; --ag-gem-2: #7aaeff; --ag-gem-3: #2d6ee0;
     --ag-opus: #9b7bf7; --ag-sonnet: #2dd4bf; --ag-haiku: #4ade80; --ag-fable: #e063b0;
     --ag-other: #687387; --ag-neutral: #7d8ca3;
@@ -545,6 +547,7 @@ button.tv-task:hover { background: var(--bg); }
 }
 :root[data-theme="dark"] {
   --ag-acc-1: #eab308; --ag-acc-2: #f05656; --ag-acc-3: #2dd4bf; --ag-gemini: #4f8ff7;
+  --ag-part-out: #9b7bf7; --ag-part-write: #2dd4bf; --ag-part-read: #5d6778;
   --ag-gem-1: #4f8ff7; --ag-gem-2: #7aaeff; --ag-gem-3: #2d6ee0;
   --ag-opus: #9b7bf7; --ag-sonnet: #2dd4bf; --ag-haiku: #4ade80; --ag-fable: #e063b0;
   --ag-other: #687387; --ag-neutral: #7d8ca3;
@@ -842,3 +845,9 @@ button.tv-task:hover { background: var(--bg); }
 .ag-sess.is-long .ag-sec { color: #c2410c; font-weight: 600; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ag-sess.is-long .ag-sec { color: #fb923c; } }
 :root[data-theme="dark"] .ag-sess.is-long .ag-sec { color: #fb923c; }
+/* Parti del costo: output, scritture in cache, riletture. */
+.ag-parts { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px; }
+.ag-parts-bar { height: 12px; border-radius: 4px; }
+.ag-parts-leg { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); }
+.ag-parts-leg span { display: inline-flex; align-items: center; gap: 6px; }
+.ag-parts-leg b { color: var(--text); font-variant-numeric: tabular-nums; }

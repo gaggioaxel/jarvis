@@ -2276,6 +2276,38 @@ function agRowCostUsd(r, prices = AG_PRICES) {
   ) / 1e6;
 }
 
+// Parti del costo a listino (USD) di una riga: output, scritture in cache (con l'input nuovo) e riletture.
+// Le riletture costano un ventesimo dell'input ma sono tante: ogni turno rilegge tutto il contesto.
+const AG_PARTS = [
+  { id: "output", label: "Output", color: "var(--ag-part-out)" },
+  { id: "write", label: "Scritture in cache e input", color: "var(--ag-part-write)" },
+  { id: "read", label: "Riletture da cache", color: "var(--ag-part-read)" },
+];
+function agCostParts(r, prices = AG_PRICES) {
+  const p = prices[r.model];
+  if (!p) return null;
+  const cw = r.cache_write || 0;
+  const cw1h = Math.min(cw, r.cache_write_1h || 0);
+  return {
+    output: ((r.output || 0) * p.out) / 1e6,
+    write: ((r.input || 0) * p.in + (cw - cw1h) * p.in * 1.25 + cw1h * p.in * 2) / 1e6,
+    read: ((r.cache_read || 0) * p.cr) / 1e6,
+  };
+}
+function agAddParts(acc, parts) {
+  if (parts) for (const k of Object.keys(acc)) acc[k] += parts[k];
+  return acc;
+}
+const agPartsTotal = (x) => x.output + x.write + x.read;
+// Barra impilata delle parti (larghezza in % del massimo) con tooltip.
+function agPartsBar(parts, widthPct, title) {
+  const tot = agPartsTotal(parts);
+  if (!(tot > 0)) return "";
+  const tip = AG_PARTS.map((q) => ({ label: q.label, val: `${fmtUsd(parts[q.id])} · ${Math.round((parts[q.id] / tot) * 100)}%`, color: q.color }));
+  return `<span class="ag-sbar" style="width:${widthPct}%" ${agTipAttrs(title, fmtUsd(tot), tip)}>${AG_PARTS.map((q) => parts[q.id] > 0
+    ? `<i style="flex-grow:${parts[q.id]};background:${q.color}"></i>` : "").join("")}</span>`;
+}
+
 // Intervallo del periodo (settimana | mese | trimestre = 3 mesi), giorni trascorsi e periodo precedente equivalente.
 function agPeriodRange(period, offset = 0, now = new Date()) {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -3093,7 +3125,7 @@ function agComputeSessions(data, range, prices = AG_PRICES) {
       if (!s) {
         s = { id: x.id, project: x.project, account: x.account, firstDate: doc.date, start: x.start,
           lastDate: doc.date, end: x.end, turns: 0, ctxMax: 0, ctxLast: 0, listUsd: 0, known: true,
-          readTokens: 0, allTokens: 0 };
+          readTokens: 0, allTokens: 0, parts: { output: 0, write: 0, read: 0 } };
         byId.set(x.id, s);
       }
       if (doc.date < s.firstDate || (doc.date === s.firstDate && x.start < s.start)) { s.firstDate = doc.date; s.start = x.start; }
@@ -3107,6 +3139,7 @@ function agComputeSessions(data, range, prices = AG_PRICES) {
       for (const u of x.use || []) {
         const c = agRowCostUsd(u, prices);
         if (c === null) s.known = false; else s.listUsd += c;
+        agAddParts(s.parts, agCostParts(u, prices));
         s.readTokens += u.cache_read || 0;
         s.allTokens += agAllTokens(u);
       }
@@ -3119,11 +3152,22 @@ function agComputeSessions(data, range, prices = AG_PRICES) {
   const median = costs.length ? (costs.length % 2 ? costs[(costs.length - 1) / 2] : (costs[costs.length / 2 - 1] + costs[costs.length / 2]) / 2) : 0;
   const read = list.reduce((t, x) => t + x.readTokens, 0);
   const all = list.reduce((t, x) => t + x.allTokens, 0);
+  const parts = list.reduce((t, x) => agAddParts(t, x.parts), { output: 0, write: 0, read: 0 });
   return {
-    list, long, total, median,
+    list, long, total, median, parts,
     longUsd: long.reduce((t, x) => t + x.listUsd, 0),
     readPct: all ? Math.round((read / all) * 100) : 0,
   };
+}
+
+// Barra intera delle parti del costo con legenda: quanto va in output, scritture e riletture.
+function agPartsLegend(parts) {
+  const tot = agPartsTotal(parts);
+  if (!(tot > 0)) return "";
+  return `<div class="ag-parts">
+    <span class="tv-tbar ag-parts-bar">${agPartsBar(parts, 100, "Costo a listino")}</span>
+    <div class="ag-parts-leg">${AG_PARTS.map((q) => `<span><i class="sw" style="background:${q.color}"></i>${q.label} <b>${fmtUsd(parts[q.id])}</b> · ${Math.round((parts[q.id] / tot) * 100)}%</span>`).join("")}</div>
+  </div>`;
 }
 
 function drawAgentsSessions(range, now) {
@@ -3141,7 +3185,8 @@ function drawAgentsSessions(range, now) {
       <div class="tv-total"><span>Chat lunghe</span><b>${fmtInt(S.long.length)}</b></div>
       <div class="tv-total"><span>Il loro costo</span><b>${longPct}%</b></div>
     </div>
-    <p class="ag-note">Ogni turno rilegge tutto il contesto (${S.readPct}% dei token sono letture da cache), quindi una chat lunga costa di più a ogni messaggio.
+    ${agPartsLegend(S.parts)}
+    <p class="ag-note">Ogni turno rilegge tutto il contesto (${S.readPct}% dei token sono riletture da cache), quindi una chat lunga costa di più a ogni messaggio.
       Oltre ${shortTokens(AG_LONG_CTX)} di contesto conviene chiuderla e ripartire in una sessione nuova con un riassunto. Costi a listino API.</p>
   </section>`;
   const shown = S.list.slice(0, 40);
@@ -3153,14 +3198,15 @@ function drawAgentsSessions(range, now) {
   const rowsHtml = shown.map((x) => {
     const isLong = x.ctxMax >= AG_LONG_CTX;
     const perTurn = x.turns ? x.listUsd / x.turns : 0;
+    const readPct = x.listUsd > 0 ? Math.round((x.parts.read / x.listUsd) * 100) : 0;
     const color = agAccountColor(x.account);
     const title = `Sessione ${x.id} · per riaprirla: claude --resume ${x.id}`;
     return `<div class="tv-task ag-model-row ag-sess${isLong ? " is-long" : ""}">
       <span class="ag-name-wrap" title="${esc(title)}">
         <span class="tv-name"><i class="sw" style="background:${color}"></i>${esc(x.project || "senza cartella")}${isLong ? ' <span class="ag-long">lunga</span>' : ""}</span>
-        <span class="ag-sub-inline">${esc(when(x))} · ${fmtInt(x.turns)} turni${x.turns ? ` · ${fmtUsd(perTurn)}/turno` : ""} · ${esc(x.account)}</span>
+        <span class="ag-sub-inline">${esc(when(x))} · ${fmtInt(x.turns)} turni${x.turns ? ` · ${fmtUsd(perTurn)}/turno` : ""} · riletture ${readPct}% · ${esc(x.account)}</span>
       </span>
-      <span class="tv-tbar">${x.listUsd > 0 ? `<i style="width:${(x.listUsd / maxCost) * 100}%;background:${color}"></i>` : ""}</span>
+      <span class="tv-tbar">${agPartsBar(x.parts, (x.listUsd / maxCost) * 100, x.project || "Sessione")}</span>
       <span class="ag-nums"><span class="tv-val">${x.known ? fmtUsd(x.listUsd) : "–"}</span>
         <span class="ag-sec" title="Contesto massimo${x.ctxLast !== x.ctxMax ? `; all'ultimo turno ${shortTokens(x.ctxLast)}` : ""}">${shortTokens(x.ctxMax)} ctx</span></span>
     </div>`;
@@ -3178,6 +3224,14 @@ function drawAgentsModels(agg, now) {
     return `<p class="tv-empty">Nessun dato in questo periodo.</p>`;
   }
 
+  // Parti del costo nel periodo (solo Claude: Gemini non ha cache in conto).
+  const { range } = agg;
+  const parts = { output: 0, write: 0, read: 0 };
+  for (const doc of A.data) {
+    if (!doc.date || doc.date < range.startIso || doc.date > range.endIso) continue;
+    for (const r of doc.rows || []) agAddParts(parts, agCostParts(r));
+  }
+
   // Totali in alto.
   const summaryHtml = agg.rowCount ? `<section class="tv-summary ag-mod-summary">
     <div class="ag-mod-kpis">
@@ -3185,6 +3239,7 @@ function drawAgentsModels(agg, now) {
       ${costs.hasFees ? `<div class="tv-total"><span>Spesa reale</span><b>${fmtEur(costs.realEur)}</b></div>
       <div class="tv-total"><span>Risparmio</span><b>${costs.savingsPct !== null ? `${costs.savingsPct < 0 ? `−${Math.abs(costs.savingsPct)}` : costs.savingsPct}%` : "–"}</b></div>` : ""}
     </div>
+    ${agPartsLegend(parts)}
     <p class="ag-note">${costs.hasFees
       ? `Stima a prezzi API (1 $ = ${fmtNum(AG_USD_EUR, 2)} €); gli abbonamenti non si pagano a token.`
       : "Stima a prezzi API, gli abbonamenti non si pagano a token. Imposta i canoni per vedere la spesa reale."}</p>
