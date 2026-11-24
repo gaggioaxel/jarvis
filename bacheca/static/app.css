@@ -835,3 +835,10 @@ button.tv-task:hover { background: var(--bg); }
 .install-ios { font-size: 13px; background: var(--accent-faint); border-radius: 8px; padding: 10px 12px; }
 .install-ios ol { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .install-ios svg { width: 15px; height: 15px; vertical-align: -2px; color: var(--accent); }
+
+/* Vista Agenti, scheda Sessioni: chat oltre la soglia di contesto (AG_LONG_CTX). */
+.ag-long { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  line-height: 18px; vertical-align: 1px; color: #fff; background: #c2410c; }
+.ag-sess.is-long .ag-sec { color: #c2410c; font-weight: 600; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ag-sess.is-long .ag-sec { color: #fb923c; } }
+:root[data-theme="dark"] .ag-sess.is-long .ag-sec { color: #fb923c; }

@@ -3,7 +3,7 @@
 //
 // File della pagina: prima la rete (si pubblica spesso), con 3 secondi di attesa massima, poi la cache.
 // Libreria Firebase su gstatic: ha la versione nell'indirizzo, quindi prima la cache.
-const CACHE = "bacheca-v22";
+const CACHE = "bacheca-v23";
 const FIREBASE = "https://www.gstatic.com/firebasejs/12.4.0/";
 const SHELL = [
   "/", "/index.html", "/config.js", "/app.js", "/store.js", "/md.js", "/app.css", "/icon.svg",

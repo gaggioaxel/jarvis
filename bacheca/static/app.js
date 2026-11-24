@@ -2094,7 +2094,10 @@ const AG_MONTHS_LONG = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giu
 const AG_TABS = [
   { id: "panoramica", label: "Panoramica" },
   { id: "modelli", label: "Modelli" },
+  { id: "sessioni", label: "Sessioni" },
 ];
+// Oltre questo contesto (token riletti a ogni turno) una chat conviene chiuderla e ripartire.
+const AG_LONG_CTX = Number(CONFIG.contesto_lungo) || 300000;
 const AG_PERIODS = [
   { id: "settimana", label: "Settimana" },
   { id: "mese", label: "Mese" },
@@ -2958,8 +2961,8 @@ function drawAgents(root) {
     </div>
   </div>`;
 
-  const bodyHtml = A.tab === "modelli"
-    ? drawAgentsModels(agg, now)
+  const bodyHtml = A.tab === "modelli" ? drawAgentsModels(agg, now)
+    : A.tab === "sessioni" ? drawAgentsSessions(range, now)
     : drawAgentsOverview(agg, now);
 
   root.innerHTML = `<div class="tv">${barHtml}${bodyHtml}</div>`;
@@ -3077,6 +3080,93 @@ function drawAgentsOverview(agg, now) {
     }).join("")}</div>` : "";
 
   return `${tokensHtml}${limitsHtml}${hourlyHtml}${projectsHtml}`;
+}
+
+// Sessioni del periodo: una voce per conversazione, unendo i giorni. Costo a listino dai token per modello
+// (sottoagenti compresi); contesto = token che ogni turno rilegge (input + cache), massimo e dell'ultimo turno.
+function agComputeSessions(data, range, prices = AG_PRICES) {
+  const byId = new Map();
+  for (const doc of data) {
+    if (!doc.date || doc.date < range.startIso || doc.date > range.endIso) continue;
+    for (const x of doc.sessions || []) {
+      let s = byId.get(x.id);
+      if (!s) {
+        s = { id: x.id, project: x.project, account: x.account, firstDate: doc.date, start: x.start,
+          lastDate: doc.date, end: x.end, turns: 0, ctxMax: 0, ctxLast: 0, listUsd: 0, known: true,
+          readTokens: 0, allTokens: 0 };
+        byId.set(x.id, s);
+      }
+      if (doc.date < s.firstDate || (doc.date === s.firstDate && x.start < s.start)) { s.firstDate = doc.date; s.start = x.start; }
+      if (doc.date > s.lastDate || (doc.date === s.lastDate && x.end >= s.end)) {
+        s.lastDate = doc.date; s.end = x.end;
+        if (x.turns) s.ctxLast = x.ctx_last || 0;
+      }
+      if (x.project) s.project = x.project;
+      s.turns += x.turns || 0;
+      s.ctxMax = Math.max(s.ctxMax, x.ctx_max || 0);
+      for (const u of x.use || []) {
+        const c = agRowCostUsd(u, prices);
+        if (c === null) s.known = false; else s.listUsd += c;
+        s.readTokens += u.cache_read || 0;
+        s.allTokens += agAllTokens(u);
+      }
+    }
+  }
+  const list = [...byId.values()].sort((a, b) => b.listUsd - a.listUsd);
+  const long = list.filter((x) => x.ctxMax >= AG_LONG_CTX);
+  const total = list.reduce((t, x) => t + x.listUsd, 0);
+  const costs = list.map((x) => x.listUsd).sort((a, b) => a - b);
+  const median = costs.length ? (costs.length % 2 ? costs[(costs.length - 1) / 2] : (costs[costs.length / 2 - 1] + costs[costs.length / 2]) / 2) : 0;
+  const read = list.reduce((t, x) => t + x.readTokens, 0);
+  const all = list.reduce((t, x) => t + x.allTokens, 0);
+  return {
+    list, long, total, median,
+    longUsd: long.reduce((t, x) => t + x.listUsd, 0),
+    readPct: all ? Math.round((read / all) * 100) : 0,
+  };
+}
+
+function drawAgentsSessions(range, now) {
+  const S = agComputeSessions(A.data, range);
+  if (!S.list.length) {
+    const old = A.data.some((d) => d.date >= range.startIso && d.date <= range.endIso && (d.rows || []).length);
+    return `<p class="tv-empty">${old ? "Per questo periodo non ci sono i dati per sessione (raccolti dal 24 novembre 2026)." : "Nessuna sessione in questo periodo."}</p>`;
+  }
+  const refYear = now.getFullYear();
+  const longPct = S.total > 0 ? Math.round((S.longUsd / S.total) * 100) : 0;
+  const summaryHtml = `<section class="tv-summary ag-mod-summary">
+    <div class="ag-mod-kpis">
+      <div class="tv-total"><span>Sessioni</span><b>${fmtInt(S.list.length)}</b></div>
+      <div class="tv-total"><span>Costo mediano</span><b>${fmtUsd(S.median)}</b></div>
+      <div class="tv-total"><span>Chat lunghe</span><b>${fmtInt(S.long.length)}</b></div>
+      <div class="tv-total"><span>Il loro costo</span><b>${longPct}%</b></div>
+    </div>
+    <p class="ag-note">Ogni turno rilegge tutto il contesto (${S.readPct}% dei token sono letture da cache), quindi una chat lunga costa di più a ogni messaggio.
+      Oltre ${shortTokens(AG_LONG_CTX)} di contesto conviene chiuderla e ripartire in una sessione nuova con un riassunto. Costi a listino API.</p>
+  </section>`;
+  const shown = S.list.slice(0, 40);
+  const maxCost = Math.max(1e-9, ...shown.map((x) => x.listUsd));
+  const when = (x) => {
+    const a = `${agShortDate(x.firstDate, refYear)} ${x.start}`;
+    return x.lastDate === x.firstDate ? `${a}–${x.end}` : `${a} – ${agShortDate(x.lastDate, refYear)} ${x.end}`;
+  };
+  const rowsHtml = shown.map((x) => {
+    const isLong = x.ctxMax >= AG_LONG_CTX;
+    const perTurn = x.turns ? x.listUsd / x.turns : 0;
+    const color = agAccountColor(x.account);
+    const title = `Sessione ${x.id} · per riaprirla: claude --resume ${x.id}`;
+    return `<div class="tv-task ag-model-row ag-sess${isLong ? " is-long" : ""}">
+      <span class="ag-name-wrap" title="${esc(title)}">
+        <span class="tv-name"><i class="sw" style="background:${color}"></i>${esc(x.project || "senza cartella")}${isLong ? ' <span class="ag-long">lunga</span>' : ""}</span>
+        <span class="ag-sub-inline">${esc(when(x))} · ${fmtInt(x.turns)} turni${x.turns ? ` · ${fmtUsd(perTurn)}/turno` : ""} · ${esc(x.account)}</span>
+      </span>
+      <span class="tv-tbar">${x.listUsd > 0 ? `<i style="width:${(x.listUsd / maxCost) * 100}%;background:${color}"></i>` : ""}</span>
+      <span class="ag-nums"><span class="tv-val">${x.known ? fmtUsd(x.listUsd) : "–"}</span>
+        <span class="ag-sec" title="Contesto massimo${x.ctxLast !== x.ctxMax ? `; all'ultimo turno ${shortTokens(x.ctxLast)}` : ""}">${shortTokens(x.ctxMax)} ctx</span></span>
+    </div>`;
+  }).join("");
+  const more = S.list.length > shown.length ? `<p class="ag-note">E altre ${S.list.length - shown.length} sessioni più economiche.</p>` : "";
+  return `${summaryHtml}<h3 class="tv-h">Per sessione, dalla più cara</h3><div class="tv-tasks">${rowsHtml}</div>${more}`;
 }
 
 function drawAgentsModels(agg, now) {

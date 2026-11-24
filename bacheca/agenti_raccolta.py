@@ -162,11 +162,15 @@ def _collect_transcripts(
     first_day: date | None,
     first_ts: float | None,
     session_accounts: dict[str, str],
+    sessions_out: dict[str, list[dict]] | None = None,
 ) -> dict[str, list[dict]]:
-    """Legge le trascrizioni Claude Code e aggrega per (giorno, h, account, model, project, agent)."""
+    """Legge le trascrizioni Claude Code e aggrega per (giorno, h, account, model, project, agent).
+    Se sessions_out è un dict, ci mette anche il riepilogo per sessione di ogni giorno (_summarize_sessions)."""
     root = _as_path(PROJECTS_DIR)
     if not root.is_dir():
         return {}
+    # Per sessione: (sessionId, istante, contesto della richiesta, è dell'agente principale), per chiave di dedup.
+    meta: dict[tuple, tuple[str, datetime, int, bool]] = {}
 
     # Deduplica per (sessionId, requestId) mantenendo l'ultima occorrenza incontrata.
     dedup: dict[tuple, tuple[str, int, str, str, str, str, int, int, int, int, int, int]] = {}
@@ -277,6 +281,7 @@ def _collect_transcripts(
                     cache_write_1h,
                     web,
                 )
+                meta[dedup_key] = (session_id, local_dt, inp + cache_read + cache_write, agent == "principale")
 
     grouped: dict[tuple[str, int, str, str, str, str], list[int]] = {}
     for day, hour, account, model, project, agent, *vals in dedup.values():
@@ -306,7 +311,46 @@ def _collect_transcripts(
 
     for rows in by_day.values():
         rows.sort(key=lambda r: (r["h"], r["account"], r["model"], r["project"], r["agent"]))
+    if sessions_out is not None:
+        sessions_out.update(_summarize_sessions(dedup, meta))
     return dict(by_day)
+
+
+def _summarize_sessions(dedup: dict, meta: dict) -> dict[str, list[dict]]:
+    """Una voce per (giorno, sessione): token per modello (sottoagenti compresi, per il costo), turni
+    dell'agente principale e contesto letto a ogni turno (input + cache), massimo e dell'ultimo turno.
+    Solo misure, id della sessione e nome della cartella: niente testi."""
+    acc: dict[tuple[str, str], dict] = {}
+    for key, (day, _h, account, model, project, agent, inp, out, think, cr, cw, cw1h, _web) in dedup.items():
+        session_id, when, ctx, main = meta[key]
+        s = acc.setdefault((day, session_id), {
+            "id": session_id, "project": project, "account": account,
+            "first": when, "last": when, "turns": 0, "ctx_max": 0, "ctx_last": 0, "_ctx_at": None, "use": {},
+        })
+        s["first"] = min(s["first"], when)
+        s["last"] = max(s["last"], when)
+        u = s["use"].setdefault(model, [0, 0, 0, 0, 0, 0])
+        for i, v in enumerate((1, inp, out, cr, cw, cw1h)):
+            u[i] += v
+        if main:
+            s["turns"] += 1
+            if project:
+                s["project"] = project
+            s["ctx_max"] = max(s["ctx_max"], ctx)
+            if s["_ctx_at"] is None or when >= s["_ctx_at"]:
+                s["_ctx_at"], s["ctx_last"] = when, ctx
+    out_by_day: dict[str, list[dict]] = defaultdict(list)
+    for (day, _sid), s in acc.items():
+        out_by_day[day].append({
+            "id": s["id"], "project": s["project"], "account": s["account"],
+            "start": s["first"].strftime("%H:%M"), "end": s["last"].strftime("%H:%M"),
+            "turns": s["turns"], "ctx_max": s["ctx_max"], "ctx_last": s["ctx_last"],
+            "use": [{"model": m, "req": u[0], "input": u[1], "output": u[2], "cache_read": u[3],
+                     "cache_write": u[4], "cache_write_1h": u[5]} for m, u in sorted(s["use"].items())],
+        })
+    for items in out_by_day.values():
+        items.sort(key=lambda x: (x["start"], x["id"]))
+    return dict(out_by_day)
 
 
 def _float_or_none(value: str | None) -> float | None:
@@ -414,7 +458,8 @@ def collect(days: int | None = None, since: date | datetime | str | None = None)
     )
 
     session_accounts = _load_session_accounts()
-    rows_by_day = _collect_transcripts(first_day, first_ts, session_accounts)
+    sessions_by_day: dict[str, list[dict]] = {}
+    rows_by_day = _collect_transcripts(first_day, first_ts, session_accounts, sessions_by_day)
     limits_by_day = _collect_limits(first_day)
     gemini_by_day = _collect_gemini(first_day)
 
@@ -434,6 +479,7 @@ def collect(days: int | None = None, since: date | datetime | str | None = None)
             "rows": rows,
             "limits": limits,
             "gemini": gemini,
+            "sessions": sessions_by_day.get(day, []),
         }
     return docs
 

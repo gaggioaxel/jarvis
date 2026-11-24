@@ -48,6 +48,8 @@ DEFAULTS = {
     "area_rules": [],
     # Vista Agenti: canone mensile in euro per account e ordine degli account.
     "abbonamenti": {},
+    # Vista Agenti, scheda Sessioni: contesto (token) oltre cui una chat conviene chiuderla e ripartire.
+    "contesto_lungo": 300000,
     # agenti_raccolta.py: sorgenti delle statistiche.
     "agenti": {
         "projects_dir": "~/.claude/projects",
