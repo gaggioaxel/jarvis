@@ -1,0 +1,6 @@
+[
+  {"codice": "L1", "nome": "Relazione trimestrale", "area": "Lavoro", "percorsi": ["Documents/lavoro/relazione"], "parole": ["relazione", "trimestrale"]},
+  {"codice": "C1", "nome": "Sito del cliente", "area": "Lavoro", "percorsi": ["code/sito-cliente"], "parole": ["sito"]},
+  {"codice": "S1", "nome": "Corso di statistica", "area": "Studio", "percorsi": ["Documents/studio/statistica"], "parole": ["statistica"]},
+  {"codice": "P1", "nome": "Stazione meteo", "area": "Side project", "percorsi": ["Arduino/meteo"], "parole": ["meteo", "esp32"]}
+]

@@ -1,0 +1,41 @@
+# --- Config e segreti locali (mai nel repository) ---
+config.json
+!config.example.json
+.env*
+*.local.json
+.claude/
+**/.dev.vars
+**/secret.key
+**/token.json
+**/*-sa.json
+**/vapid.json
+
+# --- Dati personali ---
+state.json
+storico.csv
+diario/
+TESISTI.md
+PROGETTI.md
+GIOCHI.md
+correzioni.json
+mappa.json
+bacheca/dati/
+bacheca/mockup/
+
+# --- File generati da scripts/genera.py (dalla config privata) ---
+bacheca/static/config.js
+bacheca/firestore.rules
+bacheca/.firebaserc
+bacheca/mcp-worker/wrangler.jsonc
+
+# --- Cache e log ---
+node_modules/
+.wrangler/
+.firebase/
+__pycache__/
+*.pyc
+*.log
+*.bak*
+
+# --- Estensione del browser con le webmail personali (resta solo in locale) ---
+brave/

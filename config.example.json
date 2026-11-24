@@ -1,0 +1,35 @@
+{
+  "_nota": "Copia in ~/.config/jarvis/config.json (chmod 600), compila e lancia python3 scripts/genera.py. Le chiavi assenti prendono i valori di jarvis_config.py.",
+  "owner_name": "Alex",
+  "allowed_emails": ["alex@example.com"],
+  "firebase_project": "il-tuo-progetto-firebase",
+  "bacheca_url": "https://il-tuo-progetto-firebase.web.app",
+  "worker_name": "jarvis-bacheca-mcp",
+  "worker_url": "https://jarvis-bacheca-mcp.tuo-sottodominio.workers.dev",
+  "kv_namespace_id": "id del namespace KV creato con: npx wrangler kv namespace create OAUTH_KV",
+  "vapid_public": "chiave pubblica VAPID (publicKey di vapid.json)",
+  "timezone": "Europe/Rome",
+  "service_account": "~/.config/jarvis/bacheca-sa.json",
+  "data_dir": "~/.local/share/jarvis",
+  "storico": "~/.local/share/jarvis/storico.csv",
+  "diario_dir": "~/.local/share/jarvis/diario",
+  "mappa": "~/.config/jarvis/mappa.json",
+  "correzioni": "~/.config/jarvis/correzioni.json",
+  "state": "~/.local/share/jarvis/state.json",
+  "tracker_dir": "~/Documents/tracker/data",
+  "transcripts_dir": "~/.claude/projects",
+  "scan": {
+    "roots": ["~/Documents", "~/code"],
+    "singles": ["~/Arduino"],
+    "containers": [],
+    "skip_names": ["jarvis"]
+  },
+  "areas": [
+    { "id": "lavoro", "name": "Lavoro", "color": "blue" },
+    { "id": "clienti", "name": "Clienti", "board": false },
+    { "id": "studio", "name": "Studio", "color": "purple" },
+    { "id": "side", "name": "Side project", "color": "pink" }
+  ],
+  "area_rules": [{ "area": "Lavoro", "code_regex": "^C\\d", "to": "clienti" }],
+  "abbonamenti": { "Personale": 20, "Lavoro": 20, "Gemini": 10 }
+}

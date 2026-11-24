@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Entrano solo le mail elencate qui (allowed_emails della config). Claude passa dall'account di servizio, che non segue queste regole.
+    function allowed() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in {{ALLOWED_EMAILS}};
+    }
+    match /{path=**} {
+      allow read, write: if allowed();
+    }
+  }
+}

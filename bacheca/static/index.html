@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1d222b">
+<title>Jarvis · Bacheca</title>
+<link rel="icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<!-- Da iOS 26.1 (anche 27) "black-translucent" non è più trasparente: iOS ci disegna sopra una sfocatura
+     che la pagina non può togliere. Con "default" la barra di stato è opaca, del colore di theme-color.
+     iOS lo legge quando l'app viene aggiunta alla Home: dopo un cambio va tolta e aggiunta di nuovo. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="login-page">
+<main class="login" id="accesso" hidden>
+  <img src="icon.svg" alt="" width="48" height="48">
+  <h1>Jarvis</h1>
+  <p class="login-error" id="errore" hidden></p>
+  <button class="btn primary wide" id="entra">Entra con Google</button>
+</main>
+<div id="app" hidden>
+<header class="top">
+  <button class="brand" type="button" aria-label="Menu" title="Menu"><img src="icon.svg" alt="" width="24" height="24"><span>Jarvis</span></button>
+  <div class="search">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="cerca" type="search" placeholder="Cerca" autocomplete="off">
+  </div>
+  <div class="top-actions">
+    <span class="sync" id="sync" role="status" aria-live="polite" hidden></span>
+    <button class="icon-btn" id="btn-annulla" title="Annulla" aria-label="Annulla" hidden>
+      <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-cronologia" title="I tuoi commenti" aria-label="I tuoi commenti">
+      <svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-installa" title="Installa come app" aria-label="Installa come app" hidden>
+      <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-notifiche" title="Notifiche" aria-label="Notifiche">
+      <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 8 2.5 8h-17S6 15 6 9"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-etichette" title="Etichette e filtro" aria-label="Etichette e filtro">
+      <svg viewBox="0 0 24 24"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg>
+    </button>
+  </div>
+</header>
+<main class="board" id="bacheca"></main>
+<main class="time-view" id="tempo" hidden></main>
+<main class="time-view agents-view" id="agenti" hidden></main>
+<nav class="views" role="tablist" aria-label="Vista">
+  <button role="tab" data-view="bacheca" aria-selected="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v10"/></svg>Bacheca</button>
+  <button role="tab" data-view="tempo" aria-selected="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Tempo</button>
+  <button role="tab" data-view="agenti" aria-selected="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M3 13v3M21 13v3"/></svg>Agenti</button>
+</nav>
+</div>
+<aside class="drawer" id="cronologia" hidden aria-label="I tuoi commenti"></aside>
+<div id="modale"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script src="config.js"></script>
+<script src="md.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

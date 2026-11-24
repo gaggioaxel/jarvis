@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
+<meta name="referrer" content="no-referrer">
+<title>Jarvis · Collega Claude</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="login-page">
+<!-- Accesso per il connettore MCP della bacheca (mcp-worker): entra con Google e torna al Worker con l'ID token. -->
+<main class="login">
+  <img src="icon.svg" alt="" width="48" height="48">
+  <h1>Collega Claude</h1>
+  <p id="testo">Un attimo…</p>
+  <p class="login-error" id="errore" hidden></p>
+  <button class="btn primary wide" id="continua" hidden>Continua</button>
+  <button class="btn wide" id="altro" hidden>Usa un altro account</button>
+</main>
+<script src="config.js"></script>
+<script type="module" src="mcp-login.js"></script>
+</body>
+</html>

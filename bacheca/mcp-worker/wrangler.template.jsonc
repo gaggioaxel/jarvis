@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "{{WORKER_NAME}}",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_EMAIL": "{{ALLOWED_EMAIL}}",
+    "FIREBASE_PROJECT": "{{FIREBASE_PROJECT}}",
+    "LOGIN_PAGE": "{{BACHECA_URL}}/mcp-login.html",
+    "BACHECA_URL": "{{BACHECA_URL}}",
+    "OWNER_NAME": "{{OWNER_NAME}}",
+    "TIMEZONE": "{{TIMEZONE}}"
+  },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "{{KV_NAMESPACE_ID}}" }],
+  "observability": { "enabled": true },
+  // Notifiche delle scadenze: src/avvisi.ts, ogni minuto.
+  "triggers": { "crons": ["* * * * *"] }
+  // secret: VAPID_KEY (JSON {publicKey, jwk} per le notifiche) -> npx wrangler secret put VAPID_KEY < ~/.config/jarvis/vapid.json
+  // secret: BACHECA_SA (JSON della chiave dell'account di servizio) -> npx wrangler secret put BACHECA_SA < ~/.config/jarvis/bacheca-sa.json
+}

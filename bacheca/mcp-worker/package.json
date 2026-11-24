@@ -1,0 +1,24 @@
+{
+  "name": "jarvis-bacheca-mcp",
+  "version": "1.0.0",
+  "description": "Connettore MCP remoto e notifiche della bacheca di Jarvis (Cloudflare Worker)",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "dev": "wrangler dev src/dev.ts",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.4",
+    "jose": "^6.2.16"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261108.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.158.0"
+  },
+  "private": true
+}
