@@ -3175,7 +3175,8 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
         s.lastDate = doc.date; s.end = x.end;
         if (x.turns) s.ctxLast = x.ctx_last || 0;
       }
-      if (x.project) { s.project = x.project; s.code = x.code || ""; }
+      if (x.fixed) s.fixed = true;
+      if (x.project && (x.fixed || !s.fixed)) { s.project = x.project; s.code = x.code || ""; }
       s.turns += x.turns || 0;
       s.ctxMax = Math.max(s.ctxMax, x.ctx_max || 0);
       for (const u of x.use || []) {
@@ -3205,8 +3206,8 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
   const touched = (t) => t.codeAdd + t.codeDel + t.docAdd + t.docDel;
   const list = [...byId.values()].map((s) => {
     const lines = [...s.lines.values()].sort((a, b) => touched(b) - touched(a));
-    // Progetto della chat: dove ha cambiato più righe in tutto il periodo, altrimenti la sua cartella.
-    if (lines.length) { s.project = lines[0].name; s.code = lines[0].code; }
+    // Progetto della chat: la correzione a mano, altrimenti dove ha cambiato più righe, altrimenti la cartella.
+    if (lines.length && !s.fixed) { s.project = lines[0].name; s.code = lines[0].code; }
     const sum = (k) => lines.reduce((t, l) => t + l[k], 0);
     let realEur = null;
     if (hasFees) {

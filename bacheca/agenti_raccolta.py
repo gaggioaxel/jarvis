@@ -41,6 +41,9 @@ GEMINI_MATCH_SECS = 60
 # Un commit è della chat se cade tra la prima modifica e questo margine dopo l'ultima, e tocca i suoi file.
 COMMIT_MARGIN = timedelta(minutes=20)
 HOME = Path.home()
+# Correzioni a mano: {"<id della sessione>": "<codice di mappa.json o nome libero>"}; file privato.
+CHAT_PROGETTI = jarvis_config.expand(_SRC.get("chat_progetti") or (jarvis_config.REPO / "chat_progetti.json"))
+SENZA_PROGETTO = "senza progetto"
 
 
 def _as_path(value: Path | str) -> Path:
@@ -114,8 +117,9 @@ def _load_org_labels() -> dict[str, str]:
     return names
 
 
-def _load_session_accounts() -> dict[str, str]:
-    """Mappa cliSessionId -> etichetta account leggendo solo `cliSessionId` dai file di sessione."""
+def _load_session_accounts(titles_out: dict[str, str] | None = None) -> dict[str, str]:
+    """Mappa cliSessionId -> etichetta account leggendo `cliSessionId` dai file di sessione dell'app.
+    Se titles_out è un dict, ci mette anche il titolo di ogni chat (serve solo a classificarla, non si carica)."""
     org_labels = _load_org_labels()
     mapping: dict[str, str] = {}
     pattern = os.path.expanduser(str(SESSIONS_GLOB))
@@ -134,7 +138,18 @@ def _load_session_accounts() -> dict[str, str]:
             cli_id = raw.get("cliSessionId")
             if isinstance(cli_id, str) and cli_id:
                 mapping[cli_id] = org_labels.get(org_id) or org_id[:8] or "CLI"
+                if titles_out is not None and isinstance(raw.get("title"), str):
+                    titles_out[cli_id] = raw["title"]
     return mapping
+
+
+def _load_overrides() -> dict[str, str]:
+    """Correzioni a mano da chat_progetti.json (le chiavi che iniziano con "_" sono note)."""
+    try:
+        data = json.loads(CHAT_PROGETTI.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: str(v) for k, v in data.items() if isinstance(data, dict) and not k.startswith("_") and v}
 
 
 def _project_name(cwd: object) -> str:
@@ -157,7 +172,12 @@ class _Mappa:
             ((str(HOME / p).rstrip("/"), e) for e in entries if isinstance(e, dict)
              for p in e.get("percorsi") or [] if isinstance(p, str) and p),
             key=lambda x: len(x[0]), reverse=True)
+        self.codes = {str(e.get("codice")): e for e in entries if isinstance(e, dict) and e.get("codice")}
+        self.words = sorted(
+            ((w.lower(), e) for e in entries if isinstance(e, dict) for w in e.get("parole") or [] if isinstance(w, str) and w),
+            key=lambda x: len(x[0]), reverse=True)
         self._cache: dict[str, dict | None] = {}
+        self._folders: dict[str, str] = {}
 
     def by_path(self, path: str) -> dict | None:
         if path not in self._cache:
@@ -170,7 +190,54 @@ class _Mappa:
         entry = self.by_path(cwd) if isinstance(cwd, str) and cwd else None
         if entry:
             return str(entry.get("codice") or ""), str(entry.get("nome") or entry.get("codice") or "")
-        return "", _project_name(cwd)
+        name = _project_name(cwd)
+        return "", (SENZA_PROGETTO if name in ("scratch", "") else name)
+
+    @staticmethod
+    def _entry(entry: dict) -> tuple[str, str]:
+        return str(entry.get("codice") or ""), str(entry.get("nome") or entry.get("codice") or "")
+
+    def by_code(self, value: str) -> tuple[str, str]:
+        """Correzione a mano: codice della mappa, o nome libero per un progetto che non c'è."""
+        return self._entry(self.codes[value]) if value in self.codes else ("", value)
+
+    def by_title(self, title: str | None) -> tuple[str, str] | None:
+        low = (title or "").lower()
+        return next((self._entry(e) for w, e in self.words if w in low), None) if low else None
+
+    def folder(self, file_path: str) -> str:
+        """Nome del progetto di un file fuori dalla mappa: la radice del suo repository git, altrimenti la
+        sua cartella; "" per i file sparsi nella home o fuori."""
+        folder = os.path.dirname(file_path)
+        if folder not in self._folders:
+            top = _git(folder, "rev-parse", "--show-toplevel").strip() if os.path.isdir(folder) else ""
+            self._folders[folder] = self._folder_name(top or self._project_root(folder))
+        return self._folders[folder]
+
+    @staticmethod
+    def _project_root(folder: str) -> str:
+        """Radice del progetto di una cartella senza git, con le cartelle di progetti di scan.py: la figlia
+        diretta della cartella di progetti più vicina, un progetto singolo, altrimenti il primo livello
+        sotto la home."""
+        scan = jarvis_config.get("scan")
+        roots = sorted((str(jarvis_config.expand(p)) for p in scan.get("roots") or []), key=len, reverse=True)
+        for root in roots:
+            if folder.startswith(root + "/"):
+                return os.path.join(root, folder[len(root) + 1:].split("/")[0])
+        for single in (str(jarvis_config.expand(p)) for p in scan.get("singles") or []):
+            if folder == single or folder.startswith(single + "/"):
+                return single
+        if folder.startswith(str(HOME) + "/"):
+            return os.path.join(str(HOME), folder[len(str(HOME)) + 1:].split("/")[0])
+        return ""
+
+    @staticmethod
+    def _folder_name(base: str) -> str:
+        """Nome mostrato per la radice di un progetto; "" per la home, le cartelle generiche e quelle nascoste."""
+        generic = {str(HOME / d) for d in ("", "Documents", "Downloads", "Desktop", "Scaricati", "Documenti")}
+        if not base.startswith(str(HOME) + "/") or base.rstrip("/") in generic or "/." in base[len(str(HOME)):]:
+            return ""
+        return os.path.basename(base.rstrip("/"))
 
 
 def _skip_file(path: str) -> bool:
@@ -515,6 +582,17 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
     mappa: _Mappa = raw.get("mappa") or _Mappa()
     cwds: dict[str, str] = raw.get("cwds", {})
     accounts: dict[str, str] = raw.get("accounts", {})
+    titles: dict[str, str] = raw.get("titles", {})
+    overrides: dict[str, str] = raw.get("overrides", {})
+
+    def fallback(sid: str) -> tuple[str, str]:
+        """Progetto di una chat senza file in mappa: correzione a mano, cartella in mappa, titolo, cartella."""
+        if sid in overrides:
+            return mappa.by_code(overrides[sid])
+        code, name = mappa.label(cwds.get(sid))
+        if code:
+            return code, name
+        return mappa.by_title(titles.get(sid)) or (code, name)
     acc: dict[tuple[str, str], dict] = {}
 
     def entry(day: str, sid: str, when: datetime) -> dict:
@@ -549,12 +627,17 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
                                    call["cache_read_tokens"], 0, 0)):
                 u[i] += v
 
-    # Righe per progetto: il file decide il progetto; fuori dalla mappa vale la cartella della sessione.
+    # Righe per progetto: il file decide il progetto. Fuori dalla mappa vale la correzione a mano, poi la
+    # cartella del file (il suo repository), poi il progetto della chat.
     for day, sid, when, file_path, added, removed in raw.get("edits", {}).values():
         s = entry(day, sid, when)
         code, name = mappa.label(file_path)
         if not code:
-            code, name = mappa.label(cwds.get(sid))
+            if sid in overrides:
+                code, name = mappa.by_code(overrides[sid])
+            else:
+                folder = mappa.folder(file_path)
+                code, name = ("", folder) if folder else fallback(sid)
         ln = s["lines"].setdefault((code, name), {"code_add": 0, "code_del": 0, "doc_add": 0, "doc_del": 0, "files": set()})
         kind = "doc" if file_path.lower().endswith(DOC_EXT) else "code"
         ln[f"{kind}_add"] += added
@@ -572,10 +655,16 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
               "doc_add": ln["doc_add"], "doc_del": ln["doc_del"], "files": len(ln["files"])}
              for (code, name), ln in s["lines"].items()),
             key=lambda p: -(p["code_add"] + p["code_del"] + p["doc_add"] + p["doc_del"]))
-        # Progetto della sessione: dove ha cambiato più righe, altrimenti la sua cartella.
-        code, name = (projects[0]["code"], projects[0]["name"]) if projects else mappa.label(cwds.get(sid))
+        # Progetto della sessione: la correzione a mano, altrimenti dove ha cambiato più righe, altrimenti
+        # cartella in mappa, titolo della chat o cartella (fallback).
+        fixed = sid in overrides
+        if fixed:
+            code, name = mappa.by_code(overrides[sid])
+        else:
+            code, name = (projects[0]["code"], projects[0]["name"]) if projects else fallback(sid)
         out_by_day[day].append({
             "id": s["id"], "project": name, "code": code, "account": s["account"],
+            **({"fixed": True} if fixed else {}),
             "start": s["first"].strftime("%H:%M"), "end": s["last"].strftime("%H:%M"),
             "turns": s["turns"], "ctx_max": s["ctx_max"], "ctx_last": s["ctx_last"],
             "use": [{"model": m, "req": u[0], "input": u[1], "output": u[2], "cache_read": u[3],
@@ -695,9 +784,11 @@ def collect(days: int | None = None, since: date | datetime | str | None = None)
         else None
     )
 
-    session_accounts = _load_session_accounts()
+    titles: dict[str, str] = {}
+    session_accounts = _load_session_accounts(titles)
     raw: dict = {}
     rows_by_day = _collect_transcripts(first_day, first_ts, session_accounts, raw)
+    raw.update(titles=titles, overrides=_load_overrides())
     limits_by_day = _collect_limits(first_day)
     gem_calls: list[tuple[datetime, dict]] = []
     gemini_by_day = _collect_gemini(first_day, gem_calls)
@@ -724,13 +815,73 @@ def collect(days: int | None = None, since: date | datetime | str | None = None)
     return docs
 
 
+def _first_prompt(session_id: str) -> str:
+    """Primo messaggio scritto nella chat (solo per --da-classificare, in locale)."""
+    for path in _as_path(PROJECTS_DIR).glob(f"*/{session_id}.jsonl"):
+        try:
+            with path.open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if '"type":"user"' not in line:
+                        continue
+                    try:
+                        content = (json.loads(line).get("message") or {}).get("content")
+                    except ValueError:
+                        continue
+                    text = content if isinstance(content, str) else " ".join(
+                        b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+                    text = " ".join(text.split())
+                    if text and not text.startswith("<"):
+                        return text[:160]
+        except OSError:
+            continue
+    return ""
+
+
+def unclassified(days: int | None = 7) -> list[dict]:
+    """Chat del periodo senza un progetto della mappa e senza correzione a mano, dalla più cara in token."""
+    titles: dict[str, str] = {}
+    _load_session_accounts(titles)
+    by_id: dict[str, dict] = {}
+    for day, doc in collect(days=days).items():
+        for x in doc["sessions"]:
+            s = by_id.setdefault(x["id"], {"id": x["id"], "days": [], "code": "", "project": "", "fixed": False,
+                                           "tokens": 0, "folders": set()})
+            s["days"].append(day)
+            s["fixed"] = s["fixed"] or bool(x.get("fixed"))
+            s["code"] = s["code"] or x["code"]
+            s["project"] = x["project"]
+            s["tokens"] += sum(u["input"] + u["output"] + u["cache_write"] for u in x["use"])
+            s["folders"].update(l["name"] for l in x["lines"])
+    out = []
+    for s in by_id.values():
+        if s["fixed"] or s["code"]:
+            continue
+        s.update(title=titles.get(s["id"], ""), prompt=_first_prompt(s["id"]), folders=sorted(s["folders"]))
+        out.append(s)
+    return sorted(out, key=lambda x: -x["tokens"])
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Raccoglie le statistiche giornaliere dei modelli Claude e Gemini."
     )
     parser.add_argument("--giorni", type=int, default=None, help="Limita agli ultimi N giorni (oggi compreso)")
     parser.add_argument("--json", action="store_true", help="Stampa i documenti interi in formato JSON")
+    parser.add_argument("--da-classificare", action="store_true",
+                        help=f"Elenca le chat senza progetto della mappa (si correggono in {CHAT_PROGETTI.name})")
     args = parser.parse_args(argv)
+
+    if args.da_classificare:
+        items = unclassified(args.giorni if args.giorni is not None else 7)
+        if not items:
+            print("Tutte le chat del periodo hanno un progetto.")
+        for x in items:
+            print(f"{x['id']}  {x['days'][0]}  {x['tokens']:>10,} token  ora: {x['project']}"
+                  + (f"  file in: {', '.join(x['folders'])}" if x['folders'] else ""))
+            print(f"    titolo: {x['title'] or '-'}")
+            if x["prompt"]:
+                print(f"    inizio: {x['prompt']}")
+        return
 
     docs = collect(days=args.giorni)
     if args.json:
