@@ -1017,7 +1017,8 @@ def main(args):
 
     elif command == "agenti":
         # agenti/{AAAA-MM-GG}: token per ora, account, modello, progetto e agente, limiti e chiamate Gemini
-        # (agenti_raccolta.py). Solo misure e nomi di cartelle: niente testi delle conversazioni.
+        # (agenti_raccolta.py), progetto, righe cambiate e commit di ogni chat. Solo misure, nomi dei progetti
+        # e titoli dei commit: niente testi delle conversazioni.
         import hashlib
         import agenti_raccolta
         days = option(rest, "--giorni")

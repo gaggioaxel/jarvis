@@ -10,7 +10,7 @@ Gira su Firebase (Hosting + Auth + Firestore) con il piano gratuito Spark, senza
 
 Tutti i valori dell'istanza stanno in un solo file privato, `~/.config/jarvis/config.json` (mai nel repository): si parte da `config.example.json` nella radice. Lo leggono gli script Python (`jarvis_config.py`) e `scripts/genera.py`, che da lì genera i file esclusi da git:
 
-- `static/config.js`: solo i valori pubblici per la pagina (nome, mail ammesse, indirizzo del Worker, chiave pubblica VAPID, ambiti, canoni della vista Agenti). Finisce su Hosting, quindi mai segreti.
+- `static/config.js`: solo i valori pubblici per la pagina (nome, mail ammesse, indirizzo del Worker, chiave pubblica VAPID, ambiti, canoni e prezzi per modello della vista Agenti). Finisce su Hosting, quindi mai segreti.
 - `firestore.rules` (da `firestore.rules.template`), `.firebaserc`, `mcp-worker/wrangler.jsonc` (da `wrangler.template.jsonc`).
 
 ```bash

@@ -50,6 +50,20 @@ DEFAULTS = {
     "abbonamenti": {},
     # Vista Agenti, scheda Sessioni: contesto (token) oltre cui una chat conviene chiuderla e ripartire.
     "contesto_lungo": 300000,
+    # Vista Agenti: prezzi di listino in USD per milione di token (in: input, out: output, cr: rilettura
+    # dalla cache; le scritture in cache costano 1,25 volte l'input, o 2 volte se durano un'ora).
+    # Vale la chiave uguale al modello, altrimenti la più lunga contenuta nel suo nome ("neon" per
+    # "gemini-4-neon-high"). Claude: listino Anthropic del 24/11/2026. Gemini: blog di Google, novembre
+    # 2026; la rilettura è nota solo per Neon, per gli altri è stimata al 10% dell'input.
+    "prezzi": {
+        "claude-opus-5-5": {"in": 4, "out": 20, "cr": 0.20},
+        "claude-sonnet-5-5": {"in": 2, "out": 10, "cr": 0.10},
+        "claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cr": 0.01},
+        "claude-fable-5-2": {"in": 8, "out": 40, "cr": 0.20},
+        "hydrogen": {"in": 1.50, "out": 7.50, "cr": 0.15},
+        "neon": {"in": 3, "out": 15, "cr": 0.15},
+        "flash": {"in": 0.75, "out": 3.75, "cr": 0.075},
+    },
     # giornata.py: cronologia del browser, per dare un tipo di lavoro ai minuti passati nel browser.
     # "categorie": nome -> domini (accetta * come in "webmail.*"); vale la prima che combacia.
     # "categorie_mie": come "categorie", ma si aggiungono davanti invece di sostituirle (per i domini personali).
@@ -76,6 +90,10 @@ DEFAULTS = {
         "usage_config": "~/.config/claude-usage-bar/config.json",
         "usage_log": "~/.local/share/claude-usage-bar/usage-log.csv",
         "gemini_calls": "~/.local/share/gemini-delegate/calls.jsonl",
+        # Righe scritte dalle chat (Edit e Write): estensioni che contano come documentazione (il resto
+        # è codice) e file che non contano (accetta * e ~): memoria e piani di Claude, file generati.
+        "righe_doc": [".md", ".txt", ".rst", ".tex", ".adoc"],
+        "righe_escludi": ["~/.claude/*", "/tmp/*", "*/package-lock.json", "*.lock", "*.min.js", "*.min.css"],
     },
 }
 

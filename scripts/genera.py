@@ -21,7 +21,7 @@ BACHECA = REPO / "bacheca"
 C = jarvis_config.CONFIG
 
 # Solo queste chiavi vanno nel browser: tutto il resto della config resta sul computer.
-PUBLIC = ["owner_name", "allowed_emails", "worker_url", "vapid_public", "areas", "area_rules", "abbonamenti", "contesto_lungo"]
+PUBLIC = ["owner_name", "allowed_emails", "worker_url", "vapid_public", "areas", "area_rules", "abbonamenti", "contesto_lungo", "prezzi"]
 
 
 def fill(template, values):

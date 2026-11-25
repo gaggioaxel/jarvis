@@ -845,9 +845,34 @@ button.tv-task:hover { background: var(--bg); }
 .ag-sess.is-long .ag-sec { color: #c2410c; font-weight: 600; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ag-sess.is-long .ag-sec { color: #fb923c; } }
 :root[data-theme="dark"] .ag-sess.is-long .ag-sec { color: #fb923c; }
+/* Vista Agenti, schede Sessioni e Progetti: codice del progetto, commit apribili, ordinamento. */
+.ag-code { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 600; line-height: 17px;
+  color: var(--muted); background: var(--bg); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.ag-sub-inline b { color: var(--text); font-weight: 600; }
+.ag-feat { padding-left: 17px; font-size: 12px; color: var(--muted); }
+.ag-feat summary { cursor: pointer; width: max-content; }
+.ag-feat ul { margin: 4px 0 2px; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; color: var(--text); }
+.ag-feat-when { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.ag-sort-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ag-sort-head .seg button { padding: 3px 8px; font-size: 12px; }
+/* Vista Agenti: bottone "i" con la spiegazione, al posto delle note fisse. */
+.agents-view .tv-summary { position: relative; }
+.agents-view .tv-summary > .ag-info { position: absolute; top: 10px; right: 10px; }
+.ag-info { display: inline-block; position: relative; vertical-align: middle; }
+.ag-info summary { display: block; list-style: none; cursor: pointer; width: 22px; height: 22px; border-radius: 50%;
+  border: 1.5px solid var(--muted); color: var(--muted); font: italic 700 13px/19px Georgia, serif; text-align: center; user-select: none; }
+.ag-info summary::-webkit-details-marker { display: none; }
+.ag-info[open] summary, .ag-info summary:hover { color: var(--text); border-color: var(--muted); }
+.ag-info-pop { position: absolute; z-index: 20; top: 24px; right: 0; width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
+  border-radius: 10px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-lift);
+  font-size: 12.5px; line-height: 1.45; font-weight: 400; font-style: normal; color: var(--text); text-align: left; }
+.ag-h-info { display: flex; align-items: center; gap: 8px; }
+.ag-h-info .ag-info-pop { left: 0; right: auto; }
+.ag-kpi-api b { color: var(--muted); }
 /* Parti del costo: output, scritture in cache, riletture. */
 .ag-parts { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px; }
 .ag-parts-bar { height: 12px; border-radius: 4px; }
 .ag-parts-leg { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); }
 .ag-parts-leg span { display: inline-flex; align-items: center; gap: 6px; }
+.tv-h + .ag-legend { margin: -4px 0 8px; }
 .ag-parts-leg b { color: var(--text); font-variant-numeric: tabular-nums; }

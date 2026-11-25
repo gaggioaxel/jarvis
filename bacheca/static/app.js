@@ -2064,25 +2064,24 @@ document.getElementById("tempo").addEventListener("pointerleave", () => { tip.hi
 const AG_ABBONAMENTI = CONFIG.abbonamenti || {};
 const AG_USD_EUR = 0.92; // cambio indicativo, aggiornalo
 
-// Prezzi di listino (USD per milione di token; fonte: listino Anthropic, 24/11/2026).
-const AG_PRICES = {
-  "claude-opus-5-5":   { in: 4,    out: 20,  cr: 0.20 },
-  "claude-sonnet-5-5": { in: 2,    out: 10,  cr: 0.10 },
-  "claude-haiku-5-5":  { in: 0.10, out: 0.50, cr: 0.01 },
-  "claude-fable-5-2":  { in: 8,    out: 40,  cr: 0.20 },
-};
-
-// Listino Gemini (USD per milione; fonte: blog di Google, novembre 2026). Lettura cache: nota solo per
-// Neon; per gli altri si stima al 10% dell'input. Carbon e Argon non hanno prezzi pubblicati: "–".
-const AG_GEMINI_PRICES = {
-  hydrogen: { in: 1.50, out: 7.50, cr: 0.15 },
-  neon:     { in: 3,    out: 15,   cr: 0.15 },
-  flash:    { in: 0.75, out: 3.75, cr: 0.075 },
-};
+// Prezzi di listino in USD per milione di token ("prezzi" della config: in, out, cr = rilettura da cache).
+const AG_PRICES = CONFIG.prezzi || {};
+// Prezzo di un modello: la chiave uguale al nome, altrimenti la più lunga contenuta nel nome
+// ("neon" vale per "gemini-4-neon-high"); null se non c'è.
+const agPriceCache = new Map();
+function agPriceOf(model, prices = AG_PRICES) {
+  const name = String(model || "");
+  if (prices[name]) return prices[name];
+  if (prices === AG_PRICES && agPriceCache.has(name)) return agPriceCache.get(name);
+  const key = Object.keys(prices).filter((k) => name.includes(k)).sort((x, y) => y.length - x.length)[0];
+  const p = key ? prices[key] : null;
+  if (prices === AG_PRICES) agPriceCache.set(name, p);
+  return p;
+}
+const agIsGemini = (model) => String(model || "").startsWith("gemini");
 // Costo a listino di una chiamata Gemini, o null se mancano i token (chiamate prima del 24/11) o il prezzo.
-function agGemCallUsd(g) {
-  const m = /gemini-(?:4-)?(?:3\.8-)?(hydrogen|neon|flash)/.exec(String(g.model || ""));
-  const p = m && AG_GEMINI_PRICES[m[1]];
+function agGemCallUsd(g, prices = AG_PRICES) {
+  const p = agPriceOf(g.model, prices);
   const tin = Number(g.input_tokens) || 0;
   const tout = (Number(g.output_tokens) || 0) + (Number(g.thinking_tokens) || 0);
   if (!p || !(tin || tout)) return null;
@@ -2095,6 +2094,7 @@ const AG_TABS = [
   { id: "panoramica", label: "Panoramica" },
   { id: "modelli", label: "Modelli" },
   { id: "sessioni", label: "Sessioni" },
+  { id: "progetti", label: "Progetti" },
 ];
 // Oltre questo contesto (token riletti a ogni turno) una chat conviene chiuderla e ripartire.
 const AG_LONG_CTX = Number(CONFIG.contesto_lungo) || 300000;
@@ -2115,6 +2115,7 @@ const A = {
   error: null,
   tab: load("agenti.scheda", "panoramica"),
   period: load("agenti.periodo", "settimana"),
+  projSort: load("agenti.ordine", "costo"),
   offset: 0,
 };
 if (!AG_TABS.some((t) => t.id === A.tab)) A.tab = "panoramica";
@@ -2260,9 +2261,9 @@ function niceScale(maxVal, minStep = 1) {
 const agNewTokens = (r) => (r.input || 0) + (r.output || 0) + (r.cache_write || 0);
 const agAllTokens = (r) => agNewTokens(r) + (r.cache_read || 0);
 
-// Costo a listino (USD) di una riga secondo i prezzi API in AG_PRICES; null se modello sconosciuto.
+// Costo a listino (USD) di una riga secondo i prezzi della config; null se modello sconosciuto.
 function agRowCostUsd(r, prices = AG_PRICES) {
-  const p = prices[r.model];
+  const p = agPriceOf(r.model, prices);
   if (!p) return null;
   const cw = r.cache_write || 0;
   const cw1h = Math.min(cw, r.cache_write_1h || 0);
@@ -2284,7 +2285,7 @@ const AG_PARTS = [
   { id: "read", label: "Riletture da cache", color: "var(--ag-part-read)" },
 ];
 function agCostParts(r, prices = AG_PRICES) {
-  const p = prices[r.model];
+  const p = agPriceOf(r.model, prices);
   if (!p) return null;
   const cw = r.cache_write || 0;
   const cw1h = Math.min(cw, r.cache_write_1h || 0);
@@ -2294,17 +2295,27 @@ function agCostParts(r, prices = AG_PRICES) {
     read: ((r.cache_read || 0) * p.cr) / 1e6,
   };
 }
+// Legenda dei colori: [{label, color}], con lo stesso stile della legenda delle parti del costo.
+function agLegend(items) {
+  if (!items.length) return "";
+  return `<div class="ag-parts-leg ag-legend">${items.map((it) => `<span><i class="sw" style="background:${it.color}"></i>${esc(it.label)}</span>`).join("")}</div>`;
+}
+// Bottone "i" che apre una spiegazione breve (niente testo fisso sotto i numeri).
+function agInfo(text) {
+  return `<details class="ag-info"><summary aria-label="Spiegazione" title="Spiegazione">i</summary><div class="ag-info-pop">${text}</div></details>`;
+}
 function agAddParts(acc, parts) {
   if (parts) for (const k of Object.keys(acc)) acc[k] += parts[k];
   return acc;
 }
 const agPartsTotal = (x) => x.output + x.write + x.read;
-// Barra impilata delle parti (larghezza in % del massimo) con tooltip.
-function agPartsBar(parts, widthPct, title) {
+const agScaleParts = (parts, k) => ({ output: parts.output * k, write: parts.write * k, read: parts.read * k });
+// Barra impilata delle parti (larghezza in % del massimo) con tooltip; fmt formatta gli importi.
+function agPartsBar(parts, widthPct, title, fmt = fmtUsd) {
   const tot = agPartsTotal(parts);
   if (!(tot > 0)) return "";
-  const tip = AG_PARTS.map((q) => ({ label: q.label, val: `${fmtUsd(parts[q.id])} · ${Math.round((parts[q.id] / tot) * 100)}%`, color: q.color }));
-  return `<span class="ag-sbar" style="width:${widthPct}%" ${agTipAttrs(title, fmtUsd(tot), tip)}>${AG_PARTS.map((q) => parts[q.id] > 0
+  const tip = AG_PARTS.map((q) => ({ label: q.label, val: `${fmt(parts[q.id])} · ${Math.round((parts[q.id] / tot) * 100)}%`, color: q.color }));
+  return `<span class="ag-sbar" style="width:${widthPct}%" ${agTipAttrs(title, fmt(tot), tip)}>${AG_PARTS.map((q) => parts[q.id] > 0
     ? `<i style="flex-grow:${parts[q.id]};background:${q.color}"></i>` : "").join("")}</span>`;
 }
 
@@ -2457,7 +2468,7 @@ function agAggregatePeriod(data, period, offset = 0, now = new Date(), abbonamen
 
       let m = modelMap.get(mk);
       if (!m) {
-        m = { model: mk, name: agModelName(mk), color: agModelColor(mk), newTokens: 0, allTokens: 0, listUsd: 0, known: Boolean(prices[mk]), byAccUsd: new Map() };
+        m = { model: mk, name: agModelName(mk), color: agModelColor(mk), newTokens: 0, allTokens: 0, listUsd: 0, known: Boolean(agPriceOf(mk, prices)), byAccUsd: new Map() };
         modelMap.set(mk, m);
       }
       m.newTokens += nt;
@@ -2645,7 +2656,7 @@ function agAggregatePeriod(data, period, offset = 0, now = new Date(), abbonamen
   const gemOk = gemCalls.filter((g) => g.ok).length;
   const gemSecs = gemCalls.reduce((s, g) => s + (Number(g.secs) || 0), 0);
   const gemChanged = gemCalls.reduce((s, g) => s + (Number(g.changed) || 0), 0);
-  const gemCosts = gemCalls.map(agGemCallUsd).filter((v) => v !== null);
+  const gemCosts = gemCalls.map((g) => agGemCallUsd(g, prices)).filter((v) => v !== null);
   const gemListUsd = gemCosts.reduce((s, v) => s + v, 0);
   const gemPriced = gemCosts.length;
   const gemModelsMap = new Map();
@@ -2995,6 +3006,7 @@ function drawAgents(root) {
 
   const bodyHtml = A.tab === "modelli" ? drawAgentsModels(agg, now)
     : A.tab === "sessioni" ? drawAgentsSessions(range, now)
+    : A.tab === "progetti" ? drawAgentsProjects(range, now)
     : drawAgentsOverview(agg, now);
 
   root.innerHTML = `<div class="tv">${barHtml}${bodyHtml}</div>`;
@@ -3115,17 +3127,35 @@ function drawAgentsOverview(agg, now) {
 }
 
 // Sessioni del periodo: una voce per conversazione, unendo i giorni. Costo a listino dai token per modello
-// (sottoagenti compresi); contesto = token che ogni turno rilegge (input + cache), massimo e dell'ultimo turno.
-function agComputeSessions(data, range, prices = AG_PRICES) {
+// (sottoagenti e chiamate Gemini compresi); contesto = token che ogni turno rilegge (input + cache), massimo e
+// dell'ultimo turno. Costo reale: il canone di ogni account ripartito sul suo costo a listino del periodo
+// (Gemini sul canone Gemini). Righe cambiate per progetto (Edit e Write) e commit fatti durante la chat.
+function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABBONAMENTI) {
+  const inRange = (doc) => doc.date && doc.date >= range.startIso && doc.date <= range.endIso;
+  // Costo a listino di ogni account nel periodo, per ripartire i canoni.
+  const accTotal = new Map();
+  let gemTotal = 0;
+  for (const doc of data) {
+    if (!inRange(doc)) continue;
+    for (const r of doc.rows || []) {
+      const c = agRowCostUsd(r, prices);
+      if (c !== null) accTotal.set(r.account, (accTotal.get(r.account) || 0) + c);
+    }
+    for (const g of doc.gemini || []) gemTotal += agGemCallUsd(g, prices) || 0;
+  }
+  const feeOf = (acc) => (typeof abbonamenti[acc] === "number" && abbonamenti[acc] > 0 ? abbonamenti[acc] * (range.elapsedDays / 30.44) : 0);
+  const hasFees = Object.entries(abbonamenti).some(([, f]) => typeof f === "number" && f > 0);
+
   const byId = new Map();
   for (const doc of data) {
-    if (!doc.date || doc.date < range.startIso || doc.date > range.endIso) continue;
+    if (!inRange(doc)) continue;
     for (const x of doc.sessions || []) {
       let s = byId.get(x.id);
       if (!s) {
-        s = { id: x.id, project: x.project, account: x.account, firstDate: doc.date, start: x.start,
+        s = { id: x.id, project: x.project, code: x.code || "", account: x.account, firstDate: doc.date, start: x.start,
           lastDate: doc.date, end: x.end, turns: 0, ctxMax: 0, ctxLast: 0, listUsd: 0, known: true,
-          readTokens: 0, allTokens: 0, parts: { output: 0, write: 0, read: 0 } };
+          readTokens: 0, allTokens: 0, newTokens: 0, parts: { output: 0, write: 0, read: 0 },
+          accUsd: new Map(), gemUsd: 0, lines: new Map(), commits: [] };
         byId.set(x.id, s);
       }
       if (doc.date < s.firstDate || (doc.date === s.firstDate && x.start < s.start)) { s.firstDate = doc.date; s.start = x.start; }
@@ -3133,40 +3163,134 @@ function agComputeSessions(data, range, prices = AG_PRICES) {
         s.lastDate = doc.date; s.end = x.end;
         if (x.turns) s.ctxLast = x.ctx_last || 0;
       }
-      if (x.project) s.project = x.project;
+      if (x.project) { s.project = x.project; s.code = x.code || ""; }
       s.turns += x.turns || 0;
       s.ctxMax = Math.max(s.ctxMax, x.ctx_max || 0);
       for (const u of x.use || []) {
         const c = agRowCostUsd(u, prices);
-        if (c === null) s.known = false; else s.listUsd += c;
+        if (c === null) s.known = false;
+        else {
+          s.listUsd += c;
+          if (agIsGemini(u.model)) s.gemUsd += c;
+          else s.accUsd.set(x.account, (s.accUsd.get(x.account) || 0) + c);
+        }
         agAddParts(s.parts, agCostParts(u, prices));
         s.readTokens += u.cache_read || 0;
         s.allTokens += agAllTokens(u);
+        s.newTokens += agNewTokens(u);
       }
+      for (const l of x.lines || []) {
+        const key = l.code || `~${l.name}`;
+        const t = s.lines.get(key) || { code: l.code || "", name: l.name, codeAdd: 0, codeDel: 0, docAdd: 0, docDel: 0, files: 0 };
+        t.codeAdd += l.code_add || 0; t.codeDel += l.code_del || 0;
+        t.docAdd += l.doc_add || 0; t.docDel += l.doc_del || 0;
+        t.files += l.files || 0;
+        s.lines.set(key, t);
+      }
+      for (const c of x.commits || []) s.commits.push({ ...c, date: doc.date });
     }
   }
-  const list = [...byId.values()].sort((a, b) => b.listUsd - a.listUsd);
+  const touched = (t) => t.codeAdd + t.codeDel + t.docAdd + t.docDel;
+  const list = [...byId.values()].map((s) => {
+    const lines = [...s.lines.values()].sort((a, b) => touched(b) - touched(a));
+    // Progetto della chat: dove ha cambiato più righe in tutto il periodo, altrimenti la sua cartella.
+    if (lines.length) { s.project = lines[0].name; s.code = lines[0].code; }
+    const sum = (k) => lines.reduce((t, l) => t + l[k], 0);
+    let realEur = null;
+    if (hasFees) {
+      realEur = 0;
+      for (const [acc, usd] of s.accUsd) if (accTotal.get(acc) > 0) realEur += feeOf(acc) * (usd / accTotal.get(acc));
+      if (gemTotal > 0) realEur += feeOf("Gemini") * (s.gemUsd / gemTotal);
+    }
+    // Spesa in euro: reale se ci sono i canoni, altrimenti il costo ad API al cambio; parti in proporzione.
+    const eur = realEur !== null ? realEur : s.listUsd * AG_USD_EUR;
+    return { ...s, lines, realEur, eur, eurParts: agScaleParts(s.parts, s.listUsd > 0 ? eur / s.listUsd : 0),
+      codeAdd: sum("codeAdd"), codeDel: sum("codeDel"), docAdd: sum("docAdd"), docDel: sum("docDel"), files: sum("files"),
+      commits: s.commits.sort((a, b) => (a.date + a.t).localeCompare(b.date + b.t)) };
+  }).sort((a, b) => b.eur - a.eur || b.listUsd - a.listUsd);
   const long = list.filter((x) => x.ctxMax >= AG_LONG_CTX);
   const total = list.reduce((t, x) => t + x.listUsd, 0);
-  const costs = list.map((x) => x.listUsd).sort((a, b) => a - b);
+  const totalEur = list.reduce((t, x) => t + x.eur, 0);
+  const costs = list.map((x) => x.eur).sort((a, b) => a - b);
   const median = costs.length ? (costs.length % 2 ? costs[(costs.length - 1) / 2] : (costs[costs.length / 2 - 1] + costs[costs.length / 2]) / 2) : 0;
   const read = list.reduce((t, x) => t + x.readTokens, 0);
   const all = list.reduce((t, x) => t + x.allTokens, 0);
-  const parts = list.reduce((t, x) => agAddParts(t, x.parts), { output: 0, write: 0, read: 0 });
+  const parts = list.reduce((t, x) => agAddParts(t, x.eurParts), { output: 0, write: 0, read: 0 });
   return {
-    list, long, total, median, parts,
-    longUsd: long.reduce((t, x) => t + x.listUsd, 0),
+    list, long, total, totalEur, median, parts, hasFees,
+    longEur: long.reduce((t, x) => t + x.eur, 0),
     readPct: all ? Math.round((read / all) * 100) : 0,
   };
 }
 
+// Spesa in euro di una chat o di un progetto: reale se ci sono i canoni, altrimenti listino al cambio.
+const agEur = (x, usdEur = AG_USD_EUR) => (x.realEur !== null && x.realEur !== undefined ? x.realEur : x.listUsd * usdEur);
+// Testo delle spiegazioni sul costo, uguale in tutte le schede.
+const AG_COST_INFO = `<b>Spesa reale</b>: i canoni degli abbonamenti divisi in base a quanto hai usato ogni modello.
+  <b>Ad API</b>: quanto avresti pagato a consumo, con la cache già scontata (una rilettura costa un ventesimo di un token nuovo).
+  Serve solo come confronto.`;
+const agNetCode = (x) => x.codeAdd - x.codeDel;
+const agNetDoc = (x) => x.docAdd - x.docDel;
+const agNet = (x) => agNetCode(x) + agNetDoc(x);
+// Righe nette per euro: quanta roba resta per ogni euro speso (null se la spesa è quasi nulla).
+const agPerEur = (x) => { const e = agEur(x); return e >= 0.005 ? agNet(x) / e : null; };
+const fmtSigned = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${fmtInt(Math.abs(n))}`;
+function agLinesText(x) {
+  const parts = [];
+  if (x.codeAdd || x.codeDel) parts.push(`codice +${fmtInt(x.codeAdd)} −${fmtInt(x.codeDel)}`);
+  if (x.docAdd || x.docDel) parts.push(`doc +${fmtInt(x.docAdd)} −${fmtInt(x.docDel)}`);
+  return parts.join(" · ");
+}
+// Elenco dei commit (le feature) apribile sotto il nome.
+function agCommitsHtml(commits, refYear, withCode = false) {
+  if (!commits.length) return "";
+  return `<details class="ag-feat"><summary>${fmtInt(commits.length)} commit</summary><ul>${commits.map((c) =>
+    `<li><span class="ag-feat-when">${esc(agShortDate(c.date, refYear))} ${esc(c.t)}${withCode && c.code ? ` · ${esc(c.code)}` : ""}</span>${esc(c.title)}</li>`).join("")}</ul></details>`;
+}
+
+// Progetti del periodo, dalle chat. Una chat che ha cambiato file di più progetti divide costo e token
+// in proporzione alle righe toccate; una chat senza modifiche va tutta al suo progetto.
+function agComputeProjects(sessions) {
+  const byKey = new Map();
+  const get = (code, name) => {
+    const key = code || `~${name || "senza progetto"}`;
+    let p = byKey.get(key);
+    if (!p) {
+      p = { code, name: name || "senza progetto", chats: 0, listUsd: 0, realEur: null, newTokens: 0,
+        codeAdd: 0, codeDel: 0, docAdd: 0, docDel: 0, files: 0, commits: [], parts: { output: 0, write: 0, read: 0 } };
+      byKey.set(key, p);
+    }
+    return p;
+  };
+  const touched = (t) => t.codeAdd + t.codeDel + t.docAdd + t.docDel;
+  for (const s of sessions) {
+    const tot = s.lines.reduce((t, l) => t + touched(l), 0);
+    const shares = tot > 0 ? s.lines.map((l) => [l, touched(l) / tot]) : [[{ code: s.code, name: s.project, codeAdd: 0, codeDel: 0, docAdd: 0, docDel: 0, files: 0 }, 1]];
+    for (const [l, w] of shares) {
+      const p = get(l.code, l.name);
+      p.chats += 1;
+      p.listUsd += s.listUsd * w;
+      if (s.realEur !== null) p.realEur = (p.realEur || 0) + s.realEur * w;
+      p.newTokens += s.newTokens * w;
+      for (const k of ["output", "write", "read"]) p.parts[k] += s.eurParts[k] * w;
+      p.codeAdd += l.codeAdd; p.codeDel += l.codeDel; p.docAdd += l.docAdd; p.docDel += l.docDel; p.files += l.files;
+    }
+    for (const c of s.commits) {
+      const l = s.lines.find((x) => x.code && x.code === c.code) || shares[0][0];
+      get(l.code, l.name).commits.push(c);
+    }
+  }
+  for (const p of byKey.values()) p.commits.sort((a, b) => (b.date + b.t).localeCompare(a.date + a.t));
+  return [...byKey.values()];
+}
+
 // Barra intera delle parti del costo con legenda: quanto va in output, scritture e riletture.
-function agPartsLegend(parts) {
+function agPartsLegend(parts, fmt = fmtUsd, title = "Costo ad API") {
   const tot = agPartsTotal(parts);
   if (!(tot > 0)) return "";
   return `<div class="ag-parts">
-    <span class="tv-tbar ag-parts-bar">${agPartsBar(parts, 100, "Costo a listino")}</span>
-    <div class="ag-parts-leg">${AG_PARTS.map((q) => `<span><i class="sw" style="background:${q.color}"></i>${q.label} <b>${fmtUsd(parts[q.id])}</b> · ${Math.round((parts[q.id] / tot) * 100)}%</span>`).join("")}</div>
+    <span class="tv-tbar ag-parts-bar">${agPartsBar(parts, 100, title, fmt)}</span>
+    <div class="ag-parts-leg">${AG_PARTS.map((q) => `<span><i class="sw" style="background:${q.color}"></i>${q.label} <b>${fmt(parts[q.id])}</b> · ${Math.round((parts[q.id] / tot) * 100)}%</span>`).join("")}</div>
   </div>`;
 }
 
@@ -3177,42 +3301,104 @@ function drawAgentsSessions(range, now) {
     return `<p class="tv-empty">${old ? "Per questo periodo non ci sono i dati per sessione (raccolti dal 24 novembre 2026)." : "Nessuna sessione in questo periodo."}</p>`;
   }
   const refYear = now.getFullYear();
-  const longPct = S.total > 0 ? Math.round((S.longUsd / S.total) * 100) : 0;
+  const longPct = S.totalEur > 0 ? Math.round((S.longEur / S.totalEur) * 100) : 0;
   const summaryHtml = `<section class="tv-summary ag-mod-summary">
+    ${agInfo(`Ogni messaggio rilegge tutta la chat dalla cache (qui il ${S.readPct}% dei token): più la chat è lunga, più costa ogni messaggio.
+      Oltre ${shortTokens(AG_LONG_CTX)} di contesto conviene ripartire con un riassunto.<br><br>${AG_COST_INFO}`)}
     <div class="ag-mod-kpis">
       <div class="tv-total"><span>Sessioni</span><b>${fmtInt(S.list.length)}</b></div>
-      <div class="tv-total"><span>Costo mediano</span><b>${fmtUsd(S.median)}</b></div>
-      <div class="tv-total"><span>Chat lunghe</span><b>${fmtInt(S.long.length)}</b></div>
-      <div class="tv-total"><span>Il loro costo</span><b>${longPct}%</b></div>
+      <div class="tv-total"><span>${S.hasFees ? "Spesa reale" : "Spesa"}</span><b>${fmtEur(S.totalEur)}</b></div>
+      ${S.hasFees ? `<div class="tv-total ag-kpi-api"><span>Ad API</span><b>${fmtUsd(S.total)}</b></div>` : ""}
+      <div class="tv-total"><span>Spesa mediana</span><b>${fmtEur(S.median)}</b></div>
+      <div class="tv-total"><span>Chat lunghe</span><b>${fmtInt(S.long.length)} · ${longPct}%</b></div>
     </div>
-    ${agPartsLegend(S.parts)}
-    <p class="ag-note">Ogni turno rilegge tutto il contesto (${S.readPct}% dei token sono riletture da cache), quindi una chat lunga costa di più a ogni messaggio.
-      Oltre ${shortTokens(AG_LONG_CTX)} di contesto conviene chiuderla e ripartire in una sessione nuova con un riassunto. Costi a listino API.</p>
+    ${agPartsLegend(S.parts, fmtEur, "Spesa")}
+    ${agLegend([...new Set(S.list.map((x) => x.account))].sort((a, b) => ((AG_ACCOUNTS.indexOf(a) + 1) || 99) - ((AG_ACCOUNTS.indexOf(b) + 1) || 99))
+      .map((acc) => ({ label: `Account ${acc}`, color: agAccountColor(acc) })))}
   </section>`;
   const shown = S.list.slice(0, 40);
-  const maxCost = Math.max(1e-9, ...shown.map((x) => x.listUsd));
+  const maxCost = Math.max(1e-9, ...shown.map((x) => x.eur));
   const when = (x) => {
     const a = `${agShortDate(x.firstDate, refYear)} ${x.start}`;
     return x.lastDate === x.firstDate ? `${a}–${x.end}` : `${a} – ${agShortDate(x.lastDate, refYear)} ${x.end}`;
   };
   const rowsHtml = shown.map((x) => {
     const isLong = x.ctxMax >= AG_LONG_CTX;
-    const perTurn = x.turns ? x.listUsd / x.turns : 0;
     const readPct = x.listUsd > 0 ? Math.round((x.parts.read / x.listUsd) * 100) : 0;
     const color = agAccountColor(x.account);
-    const title = `Sessione ${x.id} · per riaprirla: claude --resume ${x.id}`;
+    const title = `Ad API ${fmtUsd(x.listUsd)} · ${x.turns ? `${fmtEur(x.eur / x.turns)}/turno · ` : ""}riletture ${readPct}% · per riaprirla: claude --resume ${x.id}`;
+    const per = agPerEur(x);
+    const linesText = agLinesText(x);
+    const others = x.lines.length > 1 ? ` · anche ${x.lines.slice(1).map((l) => l.name).join(", ")}` : "";
     return `<div class="tv-task ag-model-row ag-sess${isLong ? " is-long" : ""}">
       <span class="ag-name-wrap" title="${esc(title)}">
-        <span class="tv-name"><i class="sw" style="background:${color}"></i>${esc(x.project || "senza cartella")}${isLong ? ' <span class="ag-long">lunga</span>' : ""}</span>
-        <span class="ag-sub-inline">${esc(when(x))} · ${fmtInt(x.turns)} turni${x.turns ? ` · ${fmtUsd(perTurn)}/turno` : ""} · riletture ${readPct}% · ${esc(x.account)}</span>
+        <span class="tv-name"><i class="sw" style="background:${color}"></i>${x.code ? `<span class="ag-code">${esc(x.code)}</span>` : ""}${esc(x.project || "senza cartella")}${isLong ? ' <span class="ag-long">lunga</span>' : ""}</span>
+        <span class="ag-sub-inline">${esc(when(x))} · ${fmtInt(x.turns)} turni · ${esc(x.account)}</span>
+        ${linesText ? `<span class="ag-sub-inline">${esc(linesText)}${per !== null ? ` · <b>${fmtSigned(Math.round(per))} righe/€</b>` : ""}${esc(others)}</span>` : ""}
+        ${agCommitsHtml(x.commits, refYear)}
       </span>
-      <span class="tv-tbar">${agPartsBar(x.parts, (x.listUsd / maxCost) * 100, x.project || "Sessione")}</span>
-      <span class="ag-nums"><span class="tv-val">${x.known ? fmtUsd(x.listUsd) : "–"}</span>
+      <span class="tv-tbar">${agPartsBar(x.eurParts, (x.eur / maxCost) * 100, x.project || "Sessione", fmtEur)}</span>
+      <span class="ag-nums"><span class="tv-val">${x.known ? fmtEur(x.eur) : "–"}</span>
         <span class="ag-sec" title="Contesto massimo${x.ctxLast !== x.ctxMax ? `; all'ultimo turno ${shortTokens(x.ctxLast)}` : ""}">${shortTokens(x.ctxMax)} ctx</span></span>
     </div>`;
   }).join("");
   const more = S.list.length > shown.length ? `<p class="ag-note">E altre ${S.list.length - shown.length} sessioni più economiche.</p>` : "";
   return `${summaryHtml}<h3 class="tv-h">Per sessione, dalla più cara</h3><div class="tv-tasks">${rowsHtml}</div>${more}`;
+}
+
+// Scheda Progetti: chat, spesa e righe nette prodotte per progetto di mappa.json, e righe per euro.
+function drawAgentsProjects(range, now) {
+  const S = agComputeSessions(A.data, range);
+  if (!S.list.length) return `<p class="tv-empty">Nessuna sessione in questo periodo.</p>`;
+  const refYear = now.getFullYear();
+  const projects = agComputeProjects(S.list);
+  const byYield = A.projSort === "resa";
+  projects.sort((a, b) => byYield ? ((agPerEur(b) ?? -Infinity) - (agPerEur(a) ?? -Infinity)) : (agEur(b) - agEur(a)));
+  const tot = projects.reduce((t, p) => ({
+    eur: t.eur + agEur(p), tokens: t.tokens + p.newTokens, code: t.code + agNetCode(p), doc: t.doc + agNetDoc(p),
+    usd: t.usd + p.listUsd, commits: t.commits + p.commits.length }), { eur: 0, usd: 0, tokens: 0, code: 0, doc: 0, commits: 0 });
+  const totPer = tot.eur >= 0.005 ? (tot.code + tot.doc) / tot.eur : null;
+  const totParts = projects.reduce((t, p) => agAddParts(t, p.parts), { output: 0, write: 0, read: 0 });
+  const summaryHtml = `<section class="tv-summary ag-mod-summary">
+    ${agInfo(`<b>Righe nette</b>: righe aggiunte meno tolte dalle chat (sottoagenti compresi), divise tra codice e documentazione.
+      Non contano le modifiche fatte da terminale. Una pulizia ha righe nette negative: per questo c'è anche il numero di righe toccate.<br><br>
+      <b>Righe per euro</b>: righe nette diviso spesa. <b>Commit</b>: quelli fatti durante la chat sui file che ha cambiato.<br><br>${AG_COST_INFO}`)}
+    <div class="ag-mod-kpis">
+      <div class="tv-total"><span>Progetti</span><b>${fmtInt(projects.length)}</b></div>
+      <div class="tv-total"><span>${S.hasFees ? "Spesa reale" : "Spesa"}</span><b>${fmtEur(tot.eur)}</b></div>
+      ${S.hasFees ? `<div class="tv-total ag-kpi-api"><span>Ad API</span><b>${fmtUsd(tot.usd)}</b></div>` : ""}
+      <div class="tv-total"><span>Codice netto</span><b>${fmtSigned(tot.code)}</b></div>
+      <div class="tv-total"><span>Documentazione</span><b>${fmtSigned(tot.doc)}</b></div>
+      <div class="tv-total"><span>Righe per euro</span><b>${totPer !== null ? fmtSigned(Math.round(totPer)) : "–"}</b></div>
+    </div>
+    ${agPartsLegend(totParts, fmtEur, "Spesa")}
+  </section>`;
+  const maxEur = Math.max(1e-9, ...projects.map(agEur));
+  const rowsHtml = projects.map((p) => {
+    const per = agPerEur(p);
+    const perTok = p.newTokens > 0 ? agNet(p) / (p.newTokens / 1e6) : null;
+    const touchedLines = p.codeAdd + p.codeDel + p.docAdd + p.docDel;
+    const sub = [`${fmtInt(p.chats)} chat`, `${shortTokens(p.newTokens)} token`];
+    if (!p.code) sub.push("fuori mappa");
+    const linesBits = [`codice ${fmtSigned(agNetCode(p))}`, `doc ${fmtSigned(agNetDoc(p))}`, `${fmtInt(touchedLines)} toccate`];
+    if (perTok !== null && touchedLines) linesBits.push(`${fmtSigned(Math.round(perTok))} righe/Mtoken`);
+    return `<div class="tv-task ag-model-row ag-proj">
+      <span class="ag-name-wrap">
+        <span class="tv-name">${p.code ? `<span class="ag-code">${esc(p.code)}</span>` : ""}${esc(p.name)}</span>
+        <span class="ag-sub-inline" title="${esc(`Ad API ${fmtUsd(p.listUsd)}`)}">${esc(sub.join(" · "))}</span>
+        <span class="ag-sub-inline">${esc(linesBits.join(" · "))}</span>
+        ${agCommitsHtml(p.commits, refYear)}
+      </span>
+      <span class="tv-tbar">${agPartsBar(p.parts, (agEur(p) / maxEur) * 100, p.name, fmtEur)}</span>
+      <span class="ag-nums"><span class="tv-val">${fmtEur(agEur(p))}</span>
+        <span class="ag-sec" title="Righe nette per euro">${per !== null && touchedLines ? `${fmtSigned(Math.round(per))}/€` : "–"}</span></span>
+    </div>`;
+  }).join("");
+  return `${summaryHtml}<div class="ag-sort-head"><h3 class="tv-h">Per progetto</h3>
+    <div class="seg" role="group" aria-label="Ordina">
+      <button data-a="psort-costo" aria-pressed="${!byYield}">Per spesa</button>
+      <button data-a="psort-resa" aria-pressed="${byYield}">Per righe/€</button>
+    </div></div><div class="tv-tasks">${rowsHtml}</div>`;
 }
 
 function drawAgentsModels(agg, now) {
@@ -3233,16 +3419,16 @@ function drawAgentsModels(agg, now) {
   }
 
   // Totali in alto.
+  // Parti in euro reali: il canone si divide come il costo ad API.
+  const eurParts = agScaleParts(parts, costs.listUsd > 0 ? (costs.hasFees ? costs.realEur / costs.listUsd : AG_USD_EUR) : 0);
   const summaryHtml = agg.rowCount ? `<section class="tv-summary ag-mod-summary">
+    ${agInfo(`${AG_COST_INFO} Cambio usato: 1 $ = ${fmtNum(AG_USD_EUR, 2)} €.${costs.hasFees ? "" : "<br><br>Imposta i canoni degli abbonamenti nella config per vedere la spesa reale."}`)}
     <div class="ag-mod-kpis">
-      <div class="tv-total"><span>Costo a listino</span><b title="${esc(`≈ ${fmtEur(costs.listEur)}`)}">${fmtUsd(costs.listUsd)}</b></div>
-      ${costs.hasFees ? `<div class="tv-total"><span>Spesa reale</span><b>${fmtEur(costs.realEur)}</b></div>
-      <div class="tv-total"><span>Risparmio</span><b>${costs.savingsPct !== null ? `${costs.savingsPct < 0 ? `−${Math.abs(costs.savingsPct)}` : costs.savingsPct}%` : "–"}</b></div>` : ""}
+      ${costs.hasFees ? `<div class="tv-total"><span>Spesa reale</span><b>${fmtEur(costs.realEur)}</b></div>` : ""}
+      <div class="tv-total${costs.hasFees ? " ag-kpi-api" : ""}"><span>Ad API</span><b title="${esc(`≈ ${fmtEur(costs.listEur)}`)}">${fmtUsd(costs.listUsd)}</b></div>
+      ${costs.hasFees ? `<div class="tv-total"><span>Risparmio</span><b>${costs.savingsPct !== null ? `${costs.savingsPct < 0 ? `−${Math.abs(costs.savingsPct)}` : costs.savingsPct}%` : "–"}</b></div>` : ""}
     </div>
-    ${agPartsLegend(parts)}
-    <p class="ag-note">${costs.hasFees
-      ? `Stima a prezzi API (1 $ = ${fmtNum(AG_USD_EUR, 2)} €); gli abbonamenti non si pagano a token.`
-      : "Stima a prezzi API, gli abbonamenti non si pagano a token. Imposta i canoni per vedere la spesa reale."}</p>
+    ${agPartsLegend(eurParts, fmtEur, "Spesa")}
   </section>` : `<p class="tv-empty">Nessun uso Claude registrato in questo periodo.</p>`;
 
   // Punti di pareggio per account con canone impostato.
@@ -3250,7 +3436,7 @@ function drawAgentsModels(agg, now) {
     <div class="ag-be-list">${breakeven.map((b) => {
       const monthPart = b.paidDate
         ? `si è ripagato il ${agShortDate(b.paidDate, refYear)}`
-        : `mancano ${fmtEur(b.missingEur)} di uso a listino`;
+        : `mancano ${fmtEur(b.missingEur)} di uso ad API`;
       const parts = [monthPart];
       if (b.thresholdPct !== null) {
         let s = `pareggi usando il ${fmtPct(b.thresholdPct)} del limite a settimana`;
@@ -3288,7 +3474,10 @@ function drawAgentsModels(agg, now) {
 
   // 2. Spesa per progetto con barra impilata orizzontale delle quote dei modelli.
   const maxProjCost = Math.max(1e-9, ...costs.projects.map((p) => p.primary || 0));
+  const projModels = new Map();
+  for (const p of costs.projects) for (const m of p.models) if (!projModels.has(m.name)) projModels.set(m.name, m.color);
   const projCostHtml = costs.projects.length ? `<h3 class="tv-h">Spesa per progetto</h3>
+    ${agLegend([...projModels].map(([label, color]) => ({ label, color })))}
     <div class="tv-tasks">${costs.projects.map((p) => {
       const barPct = maxProjCost > 0 ? (p.primary / maxProjCost) * 100 : 0;
       const tipRows = p.models.map((m) => ({
@@ -3319,9 +3508,9 @@ function drawAgentsModels(agg, now) {
     ? `${fmtEur(costs.geminiFeeEur)} (canone)`
     : "non stimabile";
   const gemListNote = gemini.priced
-    ? `A listino $${(Math.round(gemini.listUsd * 100) / 100).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} su ${fmtInt(gemini.priced)} chiamate con i token${gemSave !== null ? ` · risparmio ${gemSave}%` : ""}${gemini.priced < gemini.calls ? ` (le altre ${fmtInt(gemini.calls - gemini.priced)} sono senza token)` : ""}.`
-    : "I token di Gemini si registrano dal 24/11/2026: niente listino per queste chiamate.";
-  const gemHtml = `<h3 class="tv-h">Gemini</h3>
+    ? `Ad API sarebbero ${fmtUsd(gemini.listUsd)} per ${fmtInt(gemini.priced)} chiamate${gemSave !== null ? ` (risparmi il ${gemSave}%)` : ""}.${gemini.priced < gemini.calls ? ` Le altre ${fmtInt(gemini.calls - gemini.priced)} non hanno i token: si registrano dal 24/11/2026.` : ""}`
+    : "I token di Gemini si registrano dal 24/11/2026: per queste chiamate non c'è il confronto con l'API.";
+  const gemHtml = `<h3 class="tv-h ag-h-info">Gemini${gemini.calls ? agInfo(esc(gemListNote)) : ""}</h3>
     <section class="ag-card ag-gem-card">${gemini.calls ? `
       <div class="ag-gem-stats">
         <div class="tv-total"><span>Chiamate</span><b>${fmtInt(gemini.ok)}/${fmtInt(gemini.calls)}</b></div>
@@ -3329,7 +3518,6 @@ function drawAgentsModels(agg, now) {
         <div class="tv-total"><span>File modificati</span><b>${fmtInt(gemini.changed)}</b></div>
         <div class="tv-total"><span>Spesa</span><b class="ag-gem-cost">${esc(gemCostText)}</b></div>
       </div>
-      <p class="ag-note">${esc(gemListNote)}</p>
       <div class="ag-gem-list">${gemini.models.map((m, idx) => `<div class="tv-task">
         <span class="tv-name" title="${esc(m.model)}">${esc(m.name)}</span>
         <span class="tv-tbar"><i style="width:${(m.count / maxGem) * 100}%;background:${gemShades[idx % gemShades.length]}"></i></span>
@@ -3390,6 +3578,7 @@ document.getElementById("agenti").addEventListener("click", (e) => {
     else if (action === "now") A.offset = 0;
     else if (action.startsWith("tab-")) { A.tab = action.slice(4); store("agenti.scheda", A.tab); }
     else if (action.startsWith("per-")) { A.period = action.slice(4); A.offset = 0; store("agenti.periodo", A.period); }
+    else if (action.startsWith("psort-")) { A.projSort = action.slice(6); store("agenti.ordine", A.projSort); }
     else return;
     renderAgents();
     return;
