@@ -3238,6 +3238,8 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
 
 // Spesa in euro di una chat o di un progetto: reale se ci sono i canoni, altrimenti listino al cambio.
 const agEur = (x, usdEur = AG_USD_EUR) => (x.realEur !== null && x.realEur !== undefined ? x.realEur : x.listUsd * usdEur);
+// Confronto con l'API come nota piccola sotto la spesa reale.
+const agApiSub = (usd) => `<small class="ag-kpi-sub">ad API ${fmtUsd(usd)}</small>`;
 // Testo delle spiegazioni sul costo, uguale in tutte le schede.
 const AG_COST_INFO = `<b>Spesa reale</b>: i canoni degli abbonamenti divisi in base a quanto hai usato ogni modello.
   <b>Ad API</b>: quanto avresti pagato a consumo, con la cache già scontata (una rilettura costa un ventesimo di un token nuovo).
@@ -3320,8 +3322,7 @@ function drawAgentsSessions(range, now) {
       Oltre ${shortTokens(AG_LONG_CTX)} di contesto conviene ripartire con un riassunto.<br><br>${AG_COST_INFO}`)}
     <div class="ag-mod-kpis">
       <div class="tv-total"><span>Sessioni</span><b>${fmtInt(S.list.length)}</b></div>
-      <div class="tv-total"><span>${S.hasFees ? "Spesa reale" : "Spesa"}</span><b>${fmtEur(S.totalEur)}</b></div>
-      ${S.hasFees ? `<div class="tv-total ag-kpi-api"><span>Ad API</span><b>${fmtUsd(S.total)}</b></div>` : ""}
+      <div class="tv-total"><span>${S.hasFees ? "Spesa reale" : "Spesa"}</span><b>${fmtEur(S.totalEur)}</b>${S.hasFees ? agApiSub(S.total) : ""}</div>
       <div class="tv-total"><span>Spesa mediana</span><b>${fmtEur(S.median)}</b></div>
       <div class="tv-total"><span>Chat lunghe</span><b>${fmtInt(S.long.length)} · ${longPct}%</b></div>
     </div>
@@ -3378,8 +3379,7 @@ function drawAgentsProjects(range, now) {
       <b>Righe per euro</b>: righe nette diviso spesa. <b>Commit</b>: quelli fatti durante la chat sui file che ha cambiato.<br><br>${AG_COST_INFO}`)}
     <div class="ag-mod-kpis">
       <div class="tv-total"><span>Progetti</span><b>${fmtInt(projects.length)}</b></div>
-      <div class="tv-total"><span>${S.hasFees ? "Spesa reale" : "Spesa"}</span><b>${fmtEur(tot.eur)}</b></div>
-      ${S.hasFees ? `<div class="tv-total ag-kpi-api"><span>Ad API</span><b>${fmtUsd(tot.usd)}</b></div>` : ""}
+      <div class="tv-total"><span>${S.hasFees ? "Spesa reale" : "Spesa"}</span><b>${fmtEur(tot.eur)}</b>${S.hasFees ? agApiSub(tot.usd) : ""}</div>
       <div class="tv-total"><span>Codice netto</span><b>${fmtSigned(tot.code)}</b></div>
       <div class="tv-total"><span>Documentazione</span><b>${fmtSigned(tot.doc)}</b></div>
       <div class="tv-total"><span>Righe per euro</span><b>${totPer !== null ? fmtSigned(Math.round(totPer)) : "–"}</b></div>
@@ -3437,9 +3437,9 @@ function drawAgentsModels(agg, now) {
   const summaryHtml = agg.rowCount ? `<section class="tv-summary ag-mod-summary">
     ${agInfo(`${AG_COST_INFO} Cambio usato: 1 $ = ${fmtNum(AG_USD_EUR, 2)} €.${costs.hasFees ? "" : "<br><br>Imposta i canoni degli abbonamenti nella config per vedere la spesa reale."}`)}
     <div class="ag-mod-kpis">
-      ${costs.hasFees ? `<div class="tv-total"><span>Spesa reale</span><b>${fmtEur(costs.realEur)}</b></div>` : ""}
-      <div class="tv-total${costs.hasFees ? " ag-kpi-api" : ""}"><span>Ad API</span><b title="${esc(`≈ ${fmtEur(costs.listEur)}`)}">${fmtUsd(costs.listUsd)}</b></div>
-      ${costs.hasFees ? `<div class="tv-total"><span>Risparmio</span><b>${costs.savingsPct !== null ? `${costs.savingsPct < 0 ? `−${Math.abs(costs.savingsPct)}` : costs.savingsPct}%` : "–"}</b></div>` : ""}
+      ${costs.hasFees
+        ? `<div class="tv-total"><span>Spesa reale</span><b>${fmtEur(costs.realEur)}</b>${agApiSub(costs.listUsd)}</div>`
+        : `<div class="tv-total"><span>Ad API</span><b title="${esc(`≈ ${fmtEur(costs.listEur)}`)}">${fmtUsd(costs.listUsd)}</b></div>`}
     </div>
     ${agPartsLegend(eurParts, fmtEur, "Spesa")}
   </section>` : `<p class="tv-empty">Nessun uso Claude registrato in questo periodo.</p>`;

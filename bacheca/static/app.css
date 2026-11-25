@@ -868,7 +868,7 @@ button.tv-task:hover { background: var(--bg); }
   font-size: 12.5px; line-height: 1.45; font-weight: 400; font-style: normal; color: var(--text); text-align: left; }
 .ag-h-info { display: flex; align-items: center; gap: 8px; }
 .ag-h-info .ag-info-pop { left: 0; right: auto; }
-.ag-kpi-api b { color: var(--muted); }
+.ag-kpi-sub { display: block; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 /* Parti del costo: output, scritture in cache, riletture. */
 .ag-parts { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px; }
 .ag-parts-bar { height: 12px; border-radius: 4px; }
