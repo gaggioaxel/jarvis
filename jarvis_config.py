@@ -50,6 +50,25 @@ DEFAULTS = {
     "abbonamenti": {},
     # Vista Agenti, scheda Sessioni: contesto (token) oltre cui una chat conviene chiuderla e ripartire.
     "contesto_lungo": 300000,
+    # giornata.py: cronologia del browser, per dare un tipo di lavoro ai minuti passati nel browser.
+    # "categorie": nome -> domini (accetta * come in "webmail.*"); vale la prima che combacia.
+    # "categorie_mie": come "categorie", ma si aggiungono davanti invece di sostituirle (per i domini personali).
+    "browser": {
+        "history": "~/.config/BraveSoftware/Brave-Browser/Default/History",
+        "storico": str(REPO / "storico_browser.csv"),
+        # Pezzi di titolo che dicono gia' il sito, anche quando la pagina non e' in cronologia (riunioni, chat, video).
+        # Qui solo segnaposto: i tuoi vanno in "browser.titoli" di config.json.
+        "titoli": {
+            " - posta": "mail.example.com",
+        },
+        # Segnaposto: le categorie vere vanno in "browser.categorie" di config.json (che sostituisce queste).
+        "categorie": {
+            "Posta": ["mail.example.com"],
+            "Codice": ["github.com", "localhost", "127.0.0.1"],
+            "Documenti": ["docs.example.com"],
+            "Ricerche web": ["www.example.com"],
+        },
+    },
     # agenti_raccolta.py: sorgenti delle statistiche.
     "agenti": {
         "projects_dir": "~/.claude/projects",

@@ -3,7 +3,7 @@
 Assistente personale costruito attorno a Claude: una bacheca stile Trello installabile come app, con notifiche delle scadenze, un connettore MCP per far lavorare Claude sulla bacheca da Claude Code e da claude.ai, statistiche del tempo e dell'uso dei modelli, e qualche script locale.
 
 - **`bacheca/`**: la bacheca. PWA su Firebase Hosting + Firestore (`static/`), accesso di Claude con un account di servizio (`jb.py`), server MCP locale (`mcp_server.py`), Worker Cloudflare per il connettore MCP remoto e le notifiche push (`mcp-worker/`), raccolta delle statistiche dei modelli (`agenti_raccolta.py`). Dettagli in [`bacheca/LEGGIMI.md`](bacheca/LEGGIMI.md).
-- **`giornata.py`**: unisce un tracker delle finestre e le sessioni di Claude Code in un diario giornaliero e in `storico.csv` (minuti per progetto), che `jb.py ore` carica nella vista Tempo. Progetti e correzioni da `mappa.json` e `correzioni.json` (esempi in `esempi/`).
+- **`giornata.py`**: unisce un tracker delle finestre e le sessioni di Claude Code in un diario giornaliero e in `storico.csv` (minuti per progetto), che `jb.py ore` carica nella vista Tempo. Progetti e correzioni da `mappa.json` e `correzioni.json` (esempi in `esempi/`). Quando la finestra attiva è il browser, legge la cronologia di Brave (una copia, mai l'originale) e assegna i minuti a un tipo di lavoro (posta, codice, documenti, ricerca…) per dominio: sezione "Browser per tipo di lavoro" del diario e `storico_browser.csv`. Le categorie si cambiano nella chiave `browser.categorie` di `config.json`.
 - **`scan.py`**: scansiona le cartelle dei progetti e scrive i fatti (git, note, file recenti) in `state.json`.
 
 Testi e interfaccia sono in italiano. Solo libreria standard di Python; il Worker è TypeScript.

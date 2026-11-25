@@ -31,5 +31,14 @@
     { "id": "side", "name": "Side project", "color": "pink" }
   ],
   "area_rules": [{ "area": "Lavoro", "code_regex": "^C\\d", "to": "clienti" }],
-  "abbonamenti": { "Personale": 20, "Lavoro": 20, "Gemini": 10 }
+  "abbonamenti": { "Personale": 20, "Lavoro": 20, "Gemini": 10 },
+  "browser": {
+    "titoli": { " - posta": "mail.example.com", " - video": "video.example.com" },
+    "categorie": {
+      "Posta": ["mail.example.com", "webmail.*"],
+      "Codice": ["github.com", "localhost"],
+      "Video": ["video.example.com"]
+    },
+    "categorie_mie": { "Progetti miei": ["mio-sito.example.com"] }
+  }
 }

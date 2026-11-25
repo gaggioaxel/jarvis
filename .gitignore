@@ -13,6 +13,7 @@ config.json
 # --- Dati personali ---
 state.json
 storico.csv
+storico_browser.csv
 diario/
 TESISTI.md
 PROGETTI.md

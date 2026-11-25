@@ -4,10 +4,16 @@
 La giornata AAAA-MM-GG va dalle 4 del mattino di quel giorno alle 4 del giorno dopo."""
 import argparse
 import csv
+import fnmatch
 import json
+import re
+import shutil
+import sqlite3
+import tempfile
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import jarvis_config
 
@@ -18,6 +24,10 @@ TRANSCRIPTS = jarvis_config.path("transcripts_dir")
 DIARY = jarvis_config.path("diario_dir")
 HISTORY = jarvis_config.path("storico")
 FIELDS = ["data", "codice", "progetto", "area", "focus_min", "agente_min", "file_tu", "file_agente"]
+BROWSER = jarvis_config.get("browser")
+BROWSER_FIELDS = ["data", "categoria", "minuti"]
+WEBKIT_EPOCH = 11644473600  # la cronologia di Chromium/Brave conta i microsecondi dal 1601
+NO_CATEGORY = "Altro"
 EDIT_TOOLS = {"Edit", "Write", "NotebookEdit"}
 GAP = 180
 BUCKET = 300
@@ -51,11 +61,19 @@ class Mapper:
         self.paths = sorted(
             ((str(HOME / p), e) for e in entries for p in e["percorsi"]), key=lambda x: len(x[0]), reverse=True
         )
+        self.hosts = [(d, e) for e in entries for d in e.get("domini", [])]
         self.words = sorted(((w, e) for e in entries for w in e["parole"]), key=lambda x: len(x[0]), reverse=True)
 
     def by_path(self, path):
         for prefix, entry in self.paths:
             if path == prefix or path.startswith(prefix + "/"):
+                return entry
+        return UNKNOWN
+
+    def by_host(self, host):
+        """Progetto dal dominio della scheda del browser (chiave "domini" di mappa.json, accetta *)."""
+        for pattern, entry in self.hosts:
+            if host and fnmatch.fnmatch(host, pattern):
                 return entry
         return UNKNOWN
 
@@ -65,6 +83,97 @@ class Mapper:
             if word in low:
                 return entry
         return UNKNOWN
+
+
+def norm_title(title):
+    """Titolo confrontabile: senza il contatore dei non letti, come "(3) WhatsApp", e in minuscolo."""
+    return re.sub(r"^\(\d[\d.,]*\)\s*", "", (title or "").strip()).lower()
+
+
+def browser_history(start, stop):
+    """Cronologia di Brave: visite tra start e stop (piu' un'ora prima) e indice titolo -> dominio di tutte le pagine,
+    perche' una scheda aperta da giorni, come WhatsApp, non ha visite recenti. La cronologia e' bloccata dal browser
+    mentre e' aperto, quindi si legge una copia. Le finestre private non ci sono."""
+    source = jarvis_config.expand(BROWSER["history"])
+    if not source.exists():
+        return [], {}
+    lo = int((start - timedelta(hours=1)).timestamp() + WEBKIT_EPOCH) * 1_000_000
+    hi = int(stop.timestamp() + WEBKIT_EPOCH) * 1_000_000
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / "History"
+        shutil.copy(source, copy)
+        db = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            rows = db.execute(
+                "SELECT v.visit_time, u.url, u.title FROM visits v JOIN urls u ON u.id = v.url "
+                "WHERE v.visit_time BETWEEN ? AND ? ORDER BY v.visit_time", (lo, hi)).fetchall()
+            pages = db.execute("SELECT url, title FROM urls WHERE title != '' ORDER BY last_visit_time").fetchall()
+        except sqlite3.Error:
+            return [], {}
+        finally:
+            db.close()
+    visits = [{"t": datetime.fromtimestamp(t / 1_000_000 - WEBKIT_EPOCH), "host": urlparse(url).hostname or "", "titolo": norm_title(title)}
+              for t, url, title in rows]
+    titles = {norm_title(title): urlparse(url).hostname or "" for url, title in pages}
+    return visits, titles
+
+
+def category_of(host):
+    categories = {**BROWSER.get("categorie_mie", {}), **BROWSER["categorie"]}
+    for name, patterns in categories.items():
+        if any(fnmatch.fnmatch(host, pattern) for pattern in patterns):
+            return name
+    return NO_CATEGORY
+
+
+def browser_page(span, visits, titles):
+    """Dominio della scheda in primo piano, riconosciuta dal titolo che vede il tracker: prima tra le visite del giorno,
+    poi in tutta la cronologia, anche per inizio ("WhatsApp" e "WhatsApp Web"). Senza titolo vale l'ultima visita
+    dell'intervallo. Se il titolo non si trova si lascia vuoto: meglio Altro che un dominio sbagliato."""
+    end = span["end"].replace(tzinfo=None)
+    start = span["start"].replace(tzinfo=None)
+    before = [v for v in visits if v["t"] <= end]
+    title = norm_title(span["titolo"].rsplit(" - ", 1)[0]) if " - " in span["titolo"] else ""
+    if not title or title in ("new tab", "nuova scheda", "untitled"):
+        recent = [v for v in before if v["t"] >= start - timedelta(minutes=5)]
+        return recent[-1]["host"] if recent else ""
+    for marker, host in BROWSER["titoli"].items():
+        if marker in title:
+            return host
+    for visit in reversed(before):
+        if visit["titolo"] == title:
+            return visit["host"]
+    if title in titles:
+        return titles[title]
+    if len(title) >= 6:
+        for known, host in reversed(list(titles.items())):
+            if known.startswith(title) or title.startswith(known) and len(known) >= 6:
+                return host
+    return ""
+
+
+def browser_hosts(day, spans):
+    """Segna su ogni intervallo del browser il dominio della scheda in primo piano."""
+    browser_spans = [s for s in spans if is_browser(s["app"])]
+    if not browser_spans:
+        return
+    visits, titles = browser_history(*window(day))
+    for span in browser_spans:
+        span["host"] = browser_page(span, visits, titles)
+
+
+def browser_minutes(spans):
+    """Minuti nel browser per tipo di lavoro e per dominio, solo quando il browser era davvero la finestra attiva."""
+    minutes = defaultdict(lambda: {"min": 0.0, "hosts": Counter()})
+    for span in spans:
+        if not is_browser(span["app"]):
+            continue
+        host = span.get("host", "")
+        name = category_of(host) if host else NO_CATEGORY
+        mins = (span["end"] - span["start"]).total_seconds() / 60
+        minutes[name]["min"] += mins
+        minutes[name]["hosts"][host or "?"] += mins
+    return dict(minutes)
 
 
 def tracker_events(day):
@@ -204,10 +313,14 @@ def analyze(day, mapper):
 
     rows = defaultdict(lambda: {"focus": 0.0, "agent": 0, "yours": set(), "theirs": set(), "entry": UNKNOWN})
     apps = Counter()
+    browser_hosts(day, spans)
     for span in spans:
         # Nel browser la cartella e' un falso positivo: il titolo di una scheda (WhatsApp, Inbox) puo' coincidere
-        # con il nome di una cartella qualsiasi. Li' conta solo il titolo.
-        entry = mapper.by_path(span["cartella"]) if span["cartella"] and not is_browser(span["app"]) else UNKNOWN
+        # con il nome di una cartella qualsiasi. Li' conta prima il dominio della scheda (dalla cronologia), poi il titolo.
+        if is_browser(span["app"]):
+            entry = mapper.by_host(span.get("host", ""))
+        else:
+            entry = mapper.by_path(span["cartella"]) if span["cartella"] else UNKNOWN
         if entry is UNKNOWN:
             entry = mapper.by_title(span["titolo"])
         if entry is UNKNOWN and "claude" in span["app"].lower():
@@ -240,7 +353,7 @@ def analyze(day, mapper):
         entry = mapper.by_path(path)
         rows[entry["codice"]]["theirs"].add(path)
         rows[entry["codice"]]["entry"] = entry
-    return {"spans": spans, "rows": rows, "apps": apps, "agent_files": agent_files, "events": events, "actions": actions}
+    return {"browser": browser_minutes(spans), "spans": spans, "rows": rows, "apps": apps, "agent_files": agent_files, "events": events, "actions": actions}
 
 
 def timeline(spans):
@@ -333,6 +446,11 @@ def render(day, data):
     if data["apps"]:
         lines += ["", "## Applicazioni", ""]
         lines += [f"- {app}: {clock(m)}" for app, m in data["apps"].most_common(8)]
+    if data["browser"]:
+        lines += ["", "## Browser per tipo di lavoro", ""]
+        for name, info in sorted(data["browser"].items(), key=lambda kv: kv[1]["min"], reverse=True):
+            hosts = ", ".join(f"{h} {m:.0f}m" for h, m in info["hosts"].most_common(3) if m >= 1)
+            lines.append(f"- {name}: {clock(info['min'])}" + (f" ({hosts})" if hosts else ""))
     if data["agent_files"]:
         lines += ["", "## File più lavorati dagli agenti", ""]
         busiest = sorted(data["agent_files"].items(), key=lambda kv: len(kv[1]), reverse=True)[:12]
@@ -359,6 +477,20 @@ def update_history(day, rows):
         writer.writerows(kept)
 
 
+def update_browser_history(day, browser):
+    path = jarvis_config.expand(BROWSER["storico"])
+    kept = []
+    if path.exists():
+        with path.open() as fh:
+            kept = [r for r in csv.DictReader(fh) if r["data"] != str(day)]
+    kept += [{"data": str(day), "categoria": name, "minuti": round(info["min"])} for name, info in browser.items()]
+    kept.sort(key=lambda r: (r["data"], r["categoria"]))
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, BROWSER_FIELDS)
+        writer.writeheader()
+        writer.writerows(kept)
+
+
 def complete(day):
     """Un diario scritto prima che la sua giornata finisca, alle 4 del giorno dopo, e' parziale."""
     diary = DIARY / f"{day}.md"
@@ -372,6 +504,7 @@ def process(day, mapper):
     DIARY.mkdir(exist_ok=True)
     (DIARY / f"{day}.md").write_text(render(day, data))
     update_history(day, data["rows"])
+    update_browser_history(day, data["browser"])
     print(f"{DIARY / f'{day}.md'}")
     return True
 
