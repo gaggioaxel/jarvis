@@ -268,20 +268,33 @@ def _git(repo: str, *args: str) -> str:
         return ""
 
 
-def _repo_commits(repo: str, since: datetime) -> list[tuple[datetime, str, set[str]]]:
-    """Commit del repository da `since`: (istante, titolo, file toccati in percorso assoluto)."""
+def _repo_commits(repo: str, since: datetime) -> list[tuple[datetime, str, set[str], dict[str, int]]]:
+    """Commit del repository da `since`: (istante, titolo, file toccati in percorso assoluto, righe aggiunte e
+    tolte di codice e documentazione, senza i file esclusi)."""
     out = _git(repo, "log", "--all", f"--since={since.isoformat()}", "--no-merges",
-               "--format=\x1e%ct\x1f%s", "--name-only")
+               "--format=\x1e%ct\x1f%s", "--numstat")
     commits = []
     for chunk in out.split("\x1e")[1:]:
-        head, _, names = chunk.partition("\n")
+        head, _, body = chunk.partition("\n")
         stamp, _, subject = head.partition("\x1f")
         try:
             when = datetime.fromtimestamp(int(stamp), ROME)
         except ValueError:
             continue
-        files = {os.path.join(repo, n) for n in names.splitlines() if n.strip()}
-        commits.append((when, subject.strip()[:120], files))
+        files: set[str] = set()
+        lines = {"code_add": 0, "code_del": 0, "doc_add": 0, "doc_del": 0}
+        for row in body.splitlines():
+            parts = row.split("\t")
+            if len(parts) != 3:
+                continue
+            path = os.path.join(repo, parts[2])
+            files.add(path)
+            if not (parts[0].isdigit() and parts[1].isdigit()) or _skip_file(path):
+                continue  # file binari ("-") e file esclusi
+            kind = "doc" if path.lower().endswith(DOC_EXT) else "code"
+            lines[f"{kind}_add"] += int(parts[0])
+            lines[f"{kind}_del"] += int(parts[1])
+        commits.append((when, subject.strip()[:120], files, lines))
     return commits
 
 
@@ -323,7 +336,7 @@ def _collect_transcripts(
         return {}
     mappa = mappa or _Mappa()
     # Per sessione: (sessionId, istante, contesto della richiesta, è dell'agente principale), per chiave di dedup.
-    meta: dict[tuple, tuple[str, datetime, int, bool]] = {}
+    meta: dict[tuple, tuple[str, datetime, int, bool, str]] = {}
 
     # Deduplica per (sessionId, requestId) mantenendo l'ultima occorrenza incontrata.
     dedup: dict[tuple, tuple[str, int, str, str, str, str, int, int, int, int, int, int]] = {}
@@ -458,7 +471,8 @@ def _collect_transcripts(
                     cache_write_1h,
                     web,
                 )
-                meta[dedup_key] = (session_id, local_dt, inp + cache_read + cache_write, agent == "principale")
+                effort = obj.get("effort") if isinstance(obj.get("effort"), str) else ""
+                meta[dedup_key] = (session_id, local_dt, inp + cache_read + cache_write, agent == "principale", effort[:12])
 
     grouped: dict[tuple[str, int, str, str, str, str], list[int]] = {}
     for day, hour, account, model, project, agent, *vals in dedup.values():
@@ -537,7 +551,7 @@ def _match_gemini(gem_calls: list[tuple[datetime, dict]], gem_results: set) -> d
     return out
 
 
-def _session_commits(edits: dict, mappa: _Mappa) -> dict[tuple[str, str], list[dict]]:
+def _session_commits(edits: dict, mappa: _Mappa, gemini_only: dict[str, tuple[datetime, datetime, str]] | None = None) -> dict[tuple[str, str], list[dict]]:
     """Commit fatti durante una sessione: nel repository dei file che ha cambiato, tra la prima modifica
     e COMMIT_MARGIN dopo l'ultima, e che toccano almeno uno di quei file. {(giorno, sessione): [commit]}."""
     by_session: dict[str, dict] = {}
@@ -545,8 +559,6 @@ def _session_commits(edits: dict, mappa: _Mappa) -> dict[tuple[str, str], list[d
         s = by_session.setdefault(sid, {"first": when, "last": when, "files": set()})
         s["first"], s["last"] = min(s["first"], when), max(s["last"], when)
         s["files"].add(file_path)
-    if not by_session:
-        return {}
     roots: dict[str, str | None] = {}
 
     def repo_of(file_path: str) -> str | None:
@@ -556,9 +568,19 @@ def _session_commits(edits: dict, mappa: _Mappa) -> dict[tuple[str, str], list[d
             roots[folder] = top or None
         return roots[folder]
 
+    # Chat senza Edit né Write che hanno fatto cambiare file a Gemini: i commit del repository della loro
+    # cartella nella finestra della chat, senza confronto dei file (Gemini non dice quali ha cambiato).
+    for sid, (first, last, cwd) in (gemini_only or {}).items():
+        if sid not in by_session and cwd and os.path.isdir(cwd):
+            top = _git(cwd, "rev-parse", "--show-toplevel").strip()
+            if top:
+                by_session[sid] = {"first": first, "last": last, "files": set(), "repos": {top}, "any": True}
+    if not by_session:
+        return {}
     wanted: dict[str, datetime] = {}
     for s in by_session.values():
-        s["repos"] = {r for r in map(repo_of, s["files"]) if r}
+        if "repos" not in s:
+            s["repos"] = {r for r in map(repo_of, s["files"]) if r}
         for r in s["repos"]:
             wanted[r] = min(wanted.get(r, s["first"]), s["first"])
     commits = {r: _repo_commits(r, since - timedelta(minutes=1)) for r, since in wanted.items()}
@@ -566,11 +588,13 @@ def _session_commits(edits: dict, mappa: _Mappa) -> dict[tuple[str, str], list[d
     for sid, s in by_session.items():
         seen: set[str] = set()
         for repo in sorted(s["repos"]):
-            for when, subject, touched in commits.get(repo, []):
-                if s["first"] <= when <= s["last"] + COMMIT_MARGIN and touched & s["files"] and subject not in seen:
+            for when, subject, touched, lines in commits.get(repo, []):
+                if (s["first"] <= when <= s["last"] + COMMIT_MARGIN and (s.get("any") or touched & s["files"])
+                        and subject not in seen):
                     seen.add(subject)
                     code = mappa.label(repo)[0]
-                    out[(when.strftime("%Y-%m-%d"), sid)].append({"t": when.strftime("%H:%M"), "code": code, "title": subject})
+                    out[(when.strftime("%Y-%m-%d"), sid)].append(
+                        {"t": when.strftime("%H:%M"), "code": code, "title": subject, **lines})
     return out
 
 
@@ -605,10 +629,10 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
         return s
 
     for key, (day, _h, account, model, _project, _agent, inp, out, _think, cr, cw, cw1h, _web) in raw.get("dedup", {}).items():
-        session_id, when, ctx, main = raw["meta"][key]
+        session_id, when, ctx, main, effort = raw["meta"][key]
         s = entry(day, session_id, when)
         s["account"] = account
-        u = s["use"].setdefault(model, [0, 0, 0, 0, 0, 0])
+        u = s["use"].setdefault((model, "main" if main else "sub", effort), [0, 0, 0, 0, 0, 0])
         for i, v in enumerate((1, inp, out, cr, cw, cw1h)):
             u[i] += v
         if main:
@@ -617,12 +641,18 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
             if s["_ctx_at"] is None or when >= s["_ctx_at"]:
                 s["_ctx_at"], s["ctx_last"] = when, ctx
 
+    gemini_only: dict[str, tuple[datetime, datetime, str]] = {}
     for (day, sid), calls in _match_gemini(gem_calls or [], raw.get("gem_results", set())).items():
         s = acc.get((day, sid))
         if s is None:
             continue
         for call in calls:
-            u = s["use"].setdefault(call["model"] or "gemini", [0, 0, 0, 0, 0, 0])
+            model = call["model"] or "gemini"
+            effort = model.rsplit("-", 1)[-1] if model.rsplit("-", 1)[-1] in ("low", "medium", "high", "xhigh") else ""
+            u = s["use"].setdefault((model, "gemini", effort), [0, 0, 0, 0, 0, 0])
+            if call.get("changed"):
+                first, last, _ = gemini_only.get(sid, (s["first"], s["last"], ""))
+                gemini_only[sid] = (min(first, s["first"]), max(last, s["last"]), cwds.get(sid, ""))
             for i, v in enumerate((1, call["input_tokens"], call["output_tokens"] + call["thinking_tokens"],
                                    call["cache_read_tokens"], 0, 0)):
                 u[i] += v
@@ -644,7 +674,7 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
         ln[f"{kind}_del"] += removed
         ln["files"].add(file_path)
 
-    for (day, sid), commits in _session_commits(raw.get("edits", {}), mappa).items():
+    for (day, sid), commits in _session_commits(raw.get("edits", {}), mappa, gemini_only).items():
         if (day, sid) in acc:
             acc[(day, sid)]["commits"].extend(commits)
 
@@ -667,10 +697,13 @@ def _summarize_sessions(raw: dict, gem_calls: list[tuple[datetime, dict]] | None
             **({"fixed": True} if fixed else {}),
             "start": s["first"].strftime("%H:%M"), "end": s["last"].strftime("%H:%M"),
             "turns": s["turns"], "ctx_max": s["ctx_max"], "ctx_last": s["ctx_last"],
-            "use": [{"model": m, "req": u[0], "input": u[1], "output": u[2], "cache_read": u[3],
-                     "cache_write": u[4], "cache_write_1h": u[5]} for m, u in sorted(s["use"].items())],
+            "use": [{"model": m, "role": role, "effort": eff, "req": u[0], "input": u[1], "output": u[2],
+                     "cache_read": u[3], "cache_write": u[4], "cache_write_1h": u[5]}
+                    for (m, role, eff), u in sorted(s["use"].items())],
+            # Righe di tutti i commit della chat nel giorno (anche oltre i 12 mostrati).
+            "commit_lines": {k: sum(c.get(k, 0) for c in s["commits"]) for k in ("code_add", "code_del", "doc_add", "doc_del")},
             "lines": projects,
-            "commits": sorted(s["commits"], key=lambda c: c["t"])[:12],
+            "commits": [{k: c[k] for k in ("t", "code", "title")} for c in sorted(s["commits"], key=lambda c: c["t"])[:12]],
         })
     for items in out_by_day.values():
         items.sort(key=lambda x: (x["start"], x["id"]))

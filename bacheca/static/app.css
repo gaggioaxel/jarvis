@@ -869,6 +869,24 @@ button.tv-task:hover { background: var(--bg); }
 .ag-h-info { display: flex; align-items: center; gap: 8px; }
 .ag-h-info .ag-info-pop { left: 0; right: auto; }
 .ag-kpi-sub { display: block; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* Vista Agenti, scheda Combinazioni. */
+.ag-combo-line { margin: 0; padding-right: 28px; font-size: 15px; line-height: 1.45; }
+.ag-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 11px; line-height: 17px;
+  color: var(--muted); border: 1px solid var(--line); }
+.ag-few .tv-name, .ag-few .tv-val, .ag-len-cell.ag-few { opacity: .6; }
+.ag-select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); max-width: 100%; }
+.ag-scatter { width: 100%; height: auto; display: block; }
+.ag-sc-grid { stroke: var(--line); stroke-width: 1; }
+.ag-sc-tick { fill: var(--faint); font-size: 11px; }
+.ag-sc-dot { stroke: var(--surface); stroke-width: 1.5; opacity: .9; cursor: pointer; }
+.ag-sc-axes { display: flex; justify-content: space-between; margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.ag-len { display: flex; flex-direction: column; gap: 6px; }
+.ag-len-row { display: grid; grid-template-columns: minmax(70px, 1fr) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; }
+.ag-len-head { font-size: 12px; color: var(--muted); }
+.ag-len-name { font-weight: 600; }
+.ag-len-cell { display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
+.ag-len-cell small { font-size: 11px; color: var(--faint); }
 /* Parti del costo: output, scritture in cache, riletture. */
 .ag-parts { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px; }
 .ag-parts-bar { height: 12px; border-radius: 4px; }

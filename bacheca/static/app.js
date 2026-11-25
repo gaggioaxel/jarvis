@@ -2095,6 +2095,7 @@ const AG_TABS = [
   { id: "modelli", label: "Modelli" },
   { id: "sessioni", label: "Sessioni" },
   { id: "progetti", label: "Progetti" },
+  { id: "combinazioni", label: "Combinazioni" },
 ];
 // Oltre questo contesto (token riletti a ogni turno) una chat conviene chiuderla e ripartire.
 const AG_LONG_CTX = Number(CONFIG.contesto_lungo) || 300000;
@@ -2116,6 +2117,7 @@ const A = {
   tab: load("agenti.scheda", "panoramica"),
   period: load("agenti.periodo", "settimana"),
   projSort: load("agenti.ordine", "costo"),
+  comboProj: load("agenti.combo-progetto", ""),
   offset: 0,
 };
 if (!AG_TABS.some((t) => t.id === A.tab)) A.tab = "panoramica";
@@ -3019,6 +3021,7 @@ function drawAgents(root) {
   const bodyHtml = A.tab === "modelli" ? drawAgentsModels(agg, now)
     : A.tab === "sessioni" ? drawAgentsSessions(range, now)
     : A.tab === "progetti" ? drawAgentsProjects(range, now)
+    : A.tab === "combinazioni" ? drawAgentsCombos(range, now)
     : drawAgentsOverview(agg, now);
 
   root.innerHTML = `<div class="tv">${barHtml}${bodyHtml}</div>`;
@@ -3155,6 +3158,7 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
     }
     for (const g of doc.gemini || []) gemTotal += agGemCallUsd(g, prices) || 0;
   }
+  const limitInc = agLimitIncrements(data, range);
   const feeOf = (acc) => (typeof abbonamenti[acc] === "number" && abbonamenti[acc] > 0 ? abbonamenti[acc] * (range.elapsedDays / 30.44) : 0);
   const hasFees = Object.entries(abbonamenti).some(([, f]) => typeof f === "number" && f > 0);
 
@@ -3167,7 +3171,8 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
         s = { id: x.id, project: x.project, code: x.code || "", account: x.account, firstDate: doc.date, start: x.start,
           lastDate: doc.date, end: x.end, turns: 0, ctxMax: 0, ctxLast: 0, listUsd: 0, known: true,
           readTokens: 0, allTokens: 0, newTokens: 0, parts: { output: 0, write: 0, read: 0 },
-          accUsd: new Map(), gemUsd: 0, lines: new Map(), commits: [] };
+          accUsd: new Map(), gemUsd: 0, lines: new Map(), commits: [], roleUse: new Map(),
+          commitLines: { codeAdd: 0, codeDel: 0, docAdd: 0, docDel: 0 }, hasRoles: false };
         byId.set(x.id, s);
       }
       if (doc.date < s.firstDate || (doc.date === s.firstDate && x.start < s.start)) { s.firstDate = doc.date; s.start = x.start; }
@@ -3191,7 +3196,17 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
         s.readTokens += u.cache_read || 0;
         s.allTokens += agAllTokens(u);
         s.newTokens += agNewTokens(u);
+        if (u.role) {
+          s.hasRoles = true;
+          const key = `${u.role}|${u.model}|${u.effort || ""}`;
+          const r = s.roleUse.get(key) || { role: u.role, model: u.model, effort: u.effort || "", usd: 0, newTokens: 0, req: 0 };
+          r.usd += c || 0; r.newTokens += agNewTokens(u); r.req += u.req || 0;
+          s.roleUse.set(key, r);
+        }
       }
+      const cl = x.commit_lines || {};
+      s.commitLines.codeAdd += cl.code_add || 0; s.commitLines.codeDel += cl.code_del || 0;
+      s.commitLines.docAdd += cl.doc_add || 0; s.commitLines.docDel += cl.doc_del || 0;
       for (const l of x.lines || []) {
         const key = l.code || `~${l.name}`;
         const t = s.lines.get(key) || { code: l.code || "", name: l.name, codeAdd: 0, codeDel: 0, docAdd: 0, docDel: 0, files: 0 };
@@ -3217,7 +3232,12 @@ function agComputeSessions(data, range, prices = AG_PRICES, abbonamenti = AG_ABB
     }
     // Spesa in euro: reale se ci sono i canoni, altrimenti il costo ad API al cambio; parti in proporzione.
     const eur = realEur !== null ? realEur : s.listUsd * AG_USD_EUR;
-    return { ...s, lines, realEur, eur, eurParts: agScaleParts(s.parts, s.listUsd > 0 ? eur / s.listUsd : 0),
+    // Quota del limite settimanale consumata (punti %), null se nessun suo account ha i campioni dei limiti.
+    let limitPct = null;
+    for (const [acc, usd] of s.accUsd) {
+      if (limitInc.has(acc) && accTotal.get(acc) > 0) limitPct = (limitPct || 0) + limitInc.get(acc) * (usd / accTotal.get(acc));
+    }
+    return { ...s, lines, realEur, eur, limitPct, eurParts: agScaleParts(s.parts, s.listUsd > 0 ? eur / s.listUsd : 0),
       codeAdd: sum("codeAdd"), codeDel: sum("codeDel"), docAdd: sum("docAdd"), docDel: sum("docDel"), files: sum("files"),
       commits: s.commits.sort((a, b) => (a.date + a.t).localeCompare(b.date + b.t)) };
   }).sort((a, b) => b.eur - a.eur || b.listUsd - a.listUsd);
@@ -3358,6 +3378,244 @@ function drawAgentsSessions(range, now) {
   }).join("");
   const more = S.list.length > shown.length ? `<p class="ag-note">E altre ${S.list.length - shown.length} sessioni più economiche.</p>` : "";
   return `${summaryHtml}<h3 class="tv-h">Per sessione, dalla più cara</h3><div class="tv-tasks">${rowsHtml}</div>${more}`;
+}
+
+// Aumento del limite settimanale di ogni account nel periodo (somma dei punti % saliti tra un campione e
+// l'altro; un reset fa ripartire da zero). Map account -> punti %.
+function agLimitIncrements(data, range) {
+  const byAcc = new Map();
+  for (const doc of data) {
+    if (!doc.date || doc.date < range.startIso || doc.date > range.endIso) continue;
+    for (const l of doc.limits || []) {
+      if (!l.account || l.sd == null) continue;
+      const ms = agDateMs(doc.date, l.t);
+      if (!Number.isFinite(ms)) continue;
+      if (!byAcc.has(l.account)) byAcc.set(l.account, []);
+      byAcc.get(l.account).push({ ms, sd: clampPct(l.sd) });
+    }
+  }
+  const out = new Map();
+  for (const [acc, samples] of byAcc) {
+    samples.sort((a, b) => a.ms - b.ms);
+    let inc = 0;
+    for (let i = 1; i < samples.length; i++) if (samples[i].sd > samples[i - 1].sd) inc += samples[i].sd - samples[i - 1].sd;
+    out.set(acc, inc);
+  }
+  return out;
+}
+
+// Famiglia breve di un modello: "Opus", "Sonnet", "Haiku", "Fable", "Gemini Neon"…
+function agFamily(model) {
+  const m = String(model || "").toLowerCase();
+  for (const f of ["opus", "sonnet", "haiku", "fable"]) if (m.includes(f)) return f[0].toUpperCase() + f.slice(1);
+  const g = /gemini-(?:[\d.]+-)*([a-z]+)/.exec(m);
+  if (g) return `Gemini ${g[1][0].toUpperCase()}${g[1].slice(1)}`;
+  return model || "?";
+}
+const AG_COMBO_MIN = 3; // chat con codice minime per fidarsi di una combinazione
+const AG_COMBO_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#06b6d4", "#d946ef"];
+const AG_CTX_BUCKETS = [
+  { id: "corta", label: "sotto 100k", max: 100000 },
+  { id: "media", label: "100k–300k", max: 300000 },
+  { id: "lunga", label: "oltre 300k", max: Infinity },
+];
+const agMedian = (xs) => {
+  if (!xs.length) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+};
+
+// Combinazione di una chat: modello ed effort dell'agente principale, più i sottoagenti che pesano almeno il
+// 5% dei token nuovi della chat (Gemini compreso). Righe: dai commit se ci sono (contano anche quelle scritte
+// da Gemini o da terminale), altrimenti dagli Edit e Write.
+function agComboOf(x) {
+  const main = new Map();
+  const subs = new Set();
+  for (const r of x.roleUse.values()) {
+    if (r.role === "main") {
+      const fam = agFamily(r.model);
+      const m = main.get(fam) || { usd: 0, efforts: new Map() };
+      m.usd += r.usd;
+      m.efforts.set(r.effort, (m.efforts.get(r.effort) || 0) + r.req);
+      main.set(fam, m);
+    } else if (x.newTokens > 0 && r.newTokens / x.newTokens >= 0.05) {
+      subs.add(agFamily(r.model));
+    }
+  }
+  if (!main.size) return null;
+  const [fam, m] = [...main].sort((a, b) => b[1].usd - a[1].usd)[0];
+  const effort = [...m.efforts].sort((a, b) => b[1] - a[1])[0][0];
+  const head = `${fam}${effort ? ` ${effort}` : ""}`;
+  const list = [...subs].sort();
+  return { main: fam, effort, label: list.length ? `${head} + ${list.join(" + ")}` : `${head} da solo` };
+}
+function agComboOutput(x) {
+  const c = x.commitLines;
+  const fromCommits = x.commits.length > 0 && (c.codeAdd + c.codeDel + c.docAdd + c.docDel) > 0;
+  const src = fromCommits ? c : x;
+  return { code: src.codeAdd - src.codeDel, doc: src.docAdd - src.docDel, fromCommits, features: x.commits.length };
+}
+
+// Statistiche per combinazione (e per lunghezza della chat) sulle chat del periodo, filtrate per progetto.
+function agComputeCombos(data, range, project = "") {
+  const S = agComputeSessions(data, range);
+  const chats = [];
+  for (const x of S.list) {
+    if (!x.hasRoles || !x.turns) continue;
+    if (project && (x.code || `~${x.project}`) !== project) continue;
+    const combo = agComboOf(x);
+    if (!combo) continue;
+    const out = agComboOutput(x);
+    chats.push({ x, combo, ...out, limitPct: x.limitPct, eur: x.eur,
+      bucket: AG_CTX_BUCKETS.find((b) => x.ctxMax < b.max).id });
+  }
+  const group = (keyOf) => {
+    const m = new Map();
+    for (const c of chats) {
+      const k = keyOf(c);
+      const g = m.get(k) || { key: k, chats: [], features: 0, code: 0, doc: 0, limitPct: 0, eur: 0, noCode: 0, hasLimit: false };
+      g.chats.push(c);
+      g.features += c.features; g.code += c.code; g.doc += c.doc; g.eur += c.eur;
+      if (c.limitPct !== null) { g.limitPct += c.limitPct; g.hasLimit = true; }
+      if (!(c.code > 0) && !c.features) g.noCode += 1;
+      m.set(k, g);
+    }
+    return [...m.values()].map((g) => {
+      const productive = g.chats.filter((c) => c.code > 0 || c.features);
+      const yields = productive.filter((c) => c.limitPct > 0.05).map((c) => c.code / c.limitPct);
+      const perEur = productive.filter((c) => c.eur >= 0.01).map((c) => c.code / c.eur);
+      return { ...g, n: g.chats.length, productive: productive.length,
+        yieldLimit: agMedian(yields), yieldEur: agMedian(perEur),
+        eurPerFeature: g.features ? g.eur / g.features : null,
+        featuresPer10: g.limitPct > 0 ? (g.features / g.limitPct) * 10 : null,
+        enough: productive.length >= AG_COMBO_MIN };
+    });
+  };
+  const byYield = (a, b) => (b.enough - a.enough) || ((b.yieldLimit ?? b.yieldEur ?? -Infinity) - (a.yieldLimit ?? a.yieldEur ?? -Infinity)) || (b.n - a.n);
+  const combos = group((c) => c.combo.label).sort(byYield);
+  const lengths = group((c) => `${c.combo.main}|${c.bucket}`).sort((a, b) => a.key.localeCompare(b.key));
+  // Progetti per il filtro (sulle chat di tutto il periodo, non solo quelle filtrate).
+  const projects = new Map();
+  for (const x of S.list) {
+    const k = x.code || `~${x.project}`;
+    const p = projects.get(k) || { key: k, label: x.code ? `${x.code} ${x.project}` : x.project, n: 0 };
+    p.n += 1;
+    projects.set(k, p);
+  }
+  return { chats, combos, lengths, projects: [...projects.values()].sort((a, b) => b.n - a.n), useLimit: chats.some((c) => c.limitPct > 0) };
+}
+
+const fmtYield = (v) => (v === null || v === undefined ? "–" : fmtSigned(Math.round(v)));
+
+// Grafico a punti: una chat per punto, limite consumato (o spesa) in orizzontale e righe nette in verticale,
+// scale logaritmiche; colore della combinazione.
+function agComboScatter(C, colorOf) {
+  const pts = C.chats.filter((c) => c.code > 0 && (C.useLimit ? c.limitPct > 0.01 : c.eur >= 0.01));
+  if (pts.length < 3) return "";
+  const xv = (c) => (C.useLimit ? c.limitPct : c.eur);
+  const lx = pts.map((c) => Math.log10(xv(c)));
+  const ly = pts.map((c) => Math.log10(c.code));
+  const x0 = Math.floor(Math.min(...lx)), x1 = Math.ceil(Math.max(...lx));
+  const y0 = Math.floor(Math.min(...ly)), y1 = Math.ceil(Math.max(...ly));
+  const W = 640, H = 260, L = 44, B = 24, T = 8, Rm = 22;
+  const px = (v) => L + ((v - x0) / Math.max(1e-9, x1 - x0)) * (W - L - Rm);
+  const py = (v) => H - B - ((v - y0) / Math.max(1e-9, y1 - y0)) * (H - B - T);
+  const ticks = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  const fmtTick = (e, unit) => {
+    const v = 10 ** e;
+    const t = v >= 1000 ? `${v / 1000}k` : v < 1 ? String(v).replace(".", ",") : String(v);
+    return unit === "%" ? `${t}%` : unit === "€" ? `${t} €` : t;
+  };
+  const unit = C.useLimit ? "%" : "€";
+  const grid = ticks(x0, x1).map((e) => `<line x1="${px(e)}" x2="${px(e)}" y1="${T}" y2="${H - B}" class="ag-sc-grid"/><text x="${px(e)}" y="${H - 6}" text-anchor="middle" class="ag-sc-tick">${fmtTick(e, unit)}</text>`).join("")
+    + ticks(y0, y1).map((e) => `<line x1="${L}" x2="${W - Rm}" y1="${py(e)}" y2="${py(e)}" class="ag-sc-grid"/><text x="${L - 6}" y="${py(e) + 4}" text-anchor="end" class="ag-sc-tick">${fmtTick(e)}</text>`).join("");
+  const dots = pts.map((c, i) => {
+    const tip = [
+      { label: "Righe nette di codice", val: fmtSigned(c.code) },
+      { label: C.useLimit ? "Limite settimanale" : "Spesa", val: C.useLimit ? `${fmtNum(c.limitPct, 2)} punti` : fmtEur(c.eur) },
+      { label: "Feature (commit)", val: fmtInt(c.features) },
+    ];
+    return `<circle cx="${px(lx[i]).toFixed(1)}" cy="${py(ly[i]).toFixed(1)}" r="5" fill="${colorOf(c.combo.label)}" class="ag-sc-dot"
+      ${agTipAttrs(`${c.x.project} · ${c.combo.label}`, `${fmtSigned(c.code)} righe`, tip)}/>`;
+  }).join("");
+  return `<svg class="ag-scatter" viewBox="0 0 ${W} ${H}" role="img" aria-label="Righe prodotte per chat rispetto al consumo">${grid}${dots}</svg>
+    <p class="ag-sc-axes"><span>↑ righe nette di codice</span><span>→ ${C.useLimit ? "punti di limite settimanale consumati" : "spesa"}</span></p>`;
+}
+
+function drawAgentsCombos(range, now) {
+  const C = agComputeCombos(A.data, range, A.comboProj || "");
+  const select = `<select class="ag-select" data-a="combo-proj" aria-label="Progetto">
+      <option value="">Tutti i progetti</option>
+      ${C.projects.map((p) => `<option value="${esc(p.key)}" ${A.comboProj === p.key ? "selected" : ""}>${esc(p.label)} (${p.n})</option>`).join("")}
+    </select>`;
+  if (!C.chats.length) {
+    return `<div class="ag-sort-head"><h3 class="tv-h">Combinazioni</h3>${select}</div>
+      <p class="tv-empty">Nessuna chat con modello ed effort registrati in questo periodo.</p>`;
+  }
+  const colorIdx = new Map(C.combos.slice(0, AG_COMBO_COLORS.length).map((g, i) => [g.key, AG_COMBO_COLORS[i]]));
+  const colorOf = (label) => colorIdx.get(label) || "var(--ag-other)";
+  const yieldOf = (g) => (C.useLimit ? g.yieldLimit : g.yieldEur);
+  const unitText = C.useLimit ? "righe per punto di limite" : "righe per euro";
+
+  // In alto: la più efficiente con abbastanza chat contro la più usata.
+  const trusted = C.combos.filter((g) => g.enough && yieldOf(g) !== null);
+  const best = trusted[0];
+  const most = [...C.combos].sort((a, b) => b.n - a.n)[0];
+  let headline = `Servono almeno ${AG_COMBO_MIN} chat con codice per combinazione per un confronto: per ora i numeri sono indicativi.`;
+  if (best && most && best.key !== most.key && yieldOf(most) > 0) {
+    headline = `<b>${esc(best.key)}</b> produce ${fmtNum(yieldOf(best) / yieldOf(most), 1)}× ${unitText} rispetto a <b>${esc(most.key)}</b>, la combinazione che usi di più (${best.productive} chat con codice contro ${most.productive}).`;
+  } else if (best) {
+    headline = `<b>${esc(best.key)}</b> è la combinazione più efficiente fra quelle con almeno ${AG_COMBO_MIN} chat con codice: ${fmtYield(yieldOf(best))} ${unitText}.`;
+  }
+  const summaryHtml = `<section class="tv-summary ag-mod-summary ag-combo-head">
+    ${agInfo(`<b>Combinazione</b>: modello ed effort dell'agente principale, più i sottoagenti che fanno almeno il 5% dei token della chat (Gemini compreso).<br><br>
+      <b>Resa</b>: mediana per chat delle righe nette di codice per ogni punto di limite settimanale consumato. Il consumo del limite di ogni account si divide fra le sue chat in proporzione al costo dei loro token: Opus pesa più di Haiku, Gemini non tocca i limiti di Claude.
+      Senza campioni dei limiti la resa è in righe per euro.<br><br>
+      <b>Righe</b>: dai commit della chat se ci sono (contano anche quelle scritte da Gemini o da terminale), altrimenti dagli Edit e Write. <b>Feature</b>: i commit.<br><br>
+      Sono dati osservati: ogni chat fa un lavoro diverso. Filtra per progetto per confrontare lavori simili; con meno di ${AG_COMBO_MIN} chat con codice i numeri sono indicativi.`)}
+    <p class="ag-combo-line">${headline}</p>
+  </section>`;
+
+  const maxYield = Math.max(1e-9, ...C.combos.map((g) => Math.max(0, yieldOf(g) ?? 0)));
+  const rowsHtml = C.combos.map((g) => {
+    const y = yieldOf(g);
+    const sub = [`${fmtInt(g.n)} chat (${fmtInt(g.productive)} con codice)`, `${fmtInt(g.features)} feature`, `codice ${fmtSigned(g.code)}`,
+      C.useLimit && g.hasLimit ? `${fmtNum(g.limitPct, 1)} punti di limite` : null, fmtEur(g.eur),
+      g.eurPerFeature !== null ? `${fmtEur(g.eurPerFeature)}/feature` : null,
+      g.noCode ? `${Math.round((g.noCode / g.n) * 100)}% senza codice` : null].filter(Boolean);
+    return `<div class="tv-task ag-model-row${g.enough ? "" : " ag-few"}">
+      <span class="ag-name-wrap">
+        <span class="tv-name"><i class="sw" style="background:${colorOf(g.key)}"></i>${esc(g.key)}${g.enough ? "" : ' <span class="ag-tag">pochi dati</span>'}</span>
+        <span class="ag-sub-inline">${esc(sub.join(" · "))}</span>
+      </span>
+      <span class="tv-tbar">${y > 0 ? `<i style="width:${(y / maxYield) * 100}%;background:${colorOf(g.key)}"></i>` : ""}</span>
+      <span class="ag-nums"><span class="tv-val">${fmtYield(y)}</span><span class="ag-sec">${C.useLimit ? "/punto" : "/€"}</span></span>
+    </div>`;
+  }).join("");
+
+  const scatter = agComboScatter(C, colorOf);
+  const scatterHtml = scatter ? `<h3 class="tv-h">Ogni chat</h3>
+    ${agLegend(C.combos.slice(0, AG_COMBO_COLORS.length).map((g) => ({ label: g.key, color: colorOf(g.key) })).concat(C.combos.length > AG_COMBO_COLORS.length ? [{ label: "Altre", color: "var(--ag-other)" }] : []))}
+    <section class="ag-card">${scatter}</section>` : "";
+
+  // Per lunghezza della chat (contesto massimo), per modello principale.
+  const mains = [...new Set(C.lengths.map((g) => g.key.split("|")[0]))];
+  const lenRows = mains.map((main) => {
+    const cells = AG_CTX_BUCKETS.map((b) => {
+      const g = C.lengths.find((x) => x.key === `${main}|${b.id}`);
+      if (!g) return `<span class="ag-len-cell ag-few">–</span>`;
+      return `<span class="ag-len-cell${g.enough ? "" : " ag-few"}" title="${esc(`${g.n} chat · ${g.features} feature · codice ${fmtSigned(g.code)}`)}"><b>${fmtYield(yieldOf(g))}</b><small>${g.n} chat</small></span>`;
+    }).join("");
+    return `<div class="ag-len-row"><span class="ag-len-name">${esc(main)}</span>${cells}</div>`;
+  }).join("");
+  const lengthHtml = `<h3 class="tv-h ag-h-info">Per lunghezza della chat${agInfo(`Stessa resa (${unitText}), divisa per il contesto massimo della chat e per il modello dell'agente principale: dice se conviene una chat lunga o più chat corte. In grigio le celle con meno di ${AG_COMBO_MIN} chat con codice.`)}</h3>
+    <section class="ag-card ag-len">
+      <div class="ag-len-row ag-len-head"><span class="ag-len-name"></span>${AG_CTX_BUCKETS.map((b) => `<span class="ag-len-cell">${esc(b.label)}</span>`).join("")}</div>
+      ${lenRows}
+    </section>`;
+
+  return `${summaryHtml}<div class="ag-sort-head"><h3 class="tv-h">Resa per combinazione</h3>${select}</div>
+    <div class="tv-tasks">${rowsHtml}</div>${scatterHtml}${lengthHtml}`;
 }
 
 // Scheda Progetti: chat, spesa e righe nette prodotte per progetto di mappa.json, e righe per euro.
@@ -3610,6 +3868,14 @@ document.getElementById("agenti").addEventListener("click", (e) => {
     return;
   }
   hideAgTip();
+});
+
+document.getElementById("agenti").addEventListener("change", (e) => {
+  const sel = e.target.closest('select[data-a="combo-proj"]');
+  if (!sel) return;
+  A.comboProj = sel.value;
+  store("agenti.combo-progetto", A.comboProj);
+  renderAgents();
 });
 
 document.getElementById("agenti").addEventListener("pointermove", (e) => {
