@@ -2656,13 +2656,24 @@ function agAggregatePeriod(data, period, offset = 0, now = new Date(), abbonamen
   const gemOk = gemCalls.filter((g) => g.ok).length;
   const gemSecs = gemCalls.reduce((s, g) => s + (Number(g.secs) || 0), 0);
   const gemChanged = gemCalls.reduce((s, g) => s + (Number(g.changed) || 0), 0);
+  // Token di Gemini (registrati dal 24/11/2026): prodotti = output + ragionamento; letti = input + cache.
+  const gemOut = (g) => (Number(g.output_tokens) || 0) + (Number(g.thinking_tokens) || 0);
+  const gemTokens = gemCalls.reduce((t, g) => {
+    t.out += gemOut(g);
+    t.think += Number(g.thinking_tokens) || 0;
+    t.input += Number(g.input_tokens) || 0;
+    t.cacheRead += Number(g.cache_read_tokens) || 0;
+    if (gemOut(g) || Number(g.input_tokens)) t.withTokens++;
+    return t;
+  }, { out: 0, think: 0, input: 0, cacheRead: 0, withTokens: 0 });
   const gemCosts = gemCalls.map((g) => agGemCallUsd(g, prices)).filter((v) => v !== null);
   const gemListUsd = gemCosts.reduce((s, v) => s + v, 0);
   const gemPriced = gemCosts.length;
   const gemModelsMap = new Map();
   for (const g of gemCalls) {
     const mk = String(g.model || "–");
-    const gm = gemModelsMap.get(mk) || { model: mk, name: gemName(mk), count: 0, ok: 0, secs: 0 };
+    const gm = gemModelsMap.get(mk) || { model: mk, name: gemName(mk), count: 0, ok: 0, secs: 0, out: 0 };
+    gm.out += gemOut(g);
     gm.count++;
     if (g.ok) gm.ok++;
     gm.secs += Number(g.secs) || 0;
@@ -2699,6 +2710,7 @@ function agAggregatePeriod(data, period, offset = 0, now = new Date(), abbonamen
       ok: gemOk,
       secs: gemSecs,
       changed: gemChanged,
+      tokens: gemTokens,
       listUsd: gemListUsd,
       priced: gemPriced,
       models: gemModels,
@@ -3510,18 +3522,21 @@ function drawAgentsModels(agg, now) {
   const gemListNote = gemini.priced
     ? `Ad API sarebbero ${fmtUsd(gemini.listUsd)} per ${fmtInt(gemini.priced)} chiamate${gemSave !== null ? ` (risparmi il ${gemSave}%)` : ""}.${gemini.priced < gemini.calls ? ` Le altre ${fmtInt(gemini.calls - gemini.priced)} non hanno i token: si registrano dal 24/11/2026.` : ""}`
     : "I token di Gemini si registrano dal 24/11/2026: per queste chiamate non c'è il confronto con l'API.";
-  const gemHtml = `<h3 class="tv-h ag-h-info">Gemini${gemini.calls ? agInfo(esc(gemListNote)) : ""}</h3>
+  const gemInfo = `${esc(gemListNote)}<br><br><b>Token prodotti</b>: quelli scritti da Gemini, risposta più ragionamento.
+    Passa sopra il numero per vedere quanti ne ha letti.${gemini.tokens.withTokens < gemini.calls ? ` I token si registrano dal 24/11/2026: ${fmtInt(gemini.calls - gemini.tokens.withTokens)} chiamate del periodo non li hanno.` : ""}`;
+  const gemHtml = `<h3 class="tv-h ag-h-info">Gemini${gemini.calls ? agInfo(gemInfo) : ""}</h3>
     <section class="ag-card ag-gem-card">${gemini.calls ? `
       <div class="ag-gem-stats">
         <div class="tv-total"><span>Chiamate</span><b>${fmtInt(gemini.ok)}/${fmtInt(gemini.calls)}</b></div>
         <div class="tv-total"><span>Tempo</span><b>${fmtDur(gemini.secs)}</b></div>
+        <div class="tv-total"><span>Token prodotti</span><b title="${esc(`di cui ragionamento ${shortTokens(gemini.tokens.think)} · letti: ${shortTokens(gemini.tokens.input)} nuovi e ${shortTokens(gemini.tokens.cacheRead)} dalla cache`)}">${gemini.tokens.withTokens ? shortTokens(gemini.tokens.out) : "–"}</b></div>
         <div class="tv-total"><span>File modificati</span><b>${fmtInt(gemini.changed)}</b></div>
         <div class="tv-total"><span>Spesa</span><b class="ag-gem-cost">${esc(gemCostText)}</b></div>
       </div>
       <div class="ag-gem-list">${gemini.models.map((m, idx) => `<div class="tv-task">
         <span class="tv-name" title="${esc(m.model)}">${esc(m.name)}</span>
         <span class="tv-tbar"><i style="width:${(m.count / maxGem) * 100}%;background:${gemShades[idx % gemShades.length]}"></i></span>
-        <span class="ag-nums"><span class="tv-val">${fmtInt(m.count)}</span><span class="ag-sec">${fmtDur(m.secs)}</span></span>
+        <span class="ag-nums"><span class="tv-val">${fmtInt(m.count)}</span><span class="ag-sec" title="Token prodotti (output e ragionamento)">${m.out ? `${shortTokens(m.out)} tok` : "–"}</span><span class="ag-sec">${fmtDur(m.secs)}</span></span>
       </div>`).join("")}</div>`
       : `<p class="ag-note">Nessuna chiamata Gemini in questo periodo.${costs.geminiFeeEur !== null ? ` Canone periodo: ${fmtEur(costs.geminiFeeEur)}.` : ""}</p>`}
     </section>`;
