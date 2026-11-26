@@ -3412,7 +3412,7 @@ function agFamily(model) {
   if (g) return `Gemini ${g[1][0].toUpperCase()}${g[1].slice(1)}`;
   return model || "?";
 }
-const AG_COMBO_MIN = 3; // chat con codice minime per fidarsi di una combinazione
+const AG_COMBO_MIN = 8; // chat con codice minime per fidarsi di una combinazione
 const AG_COMBO_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#06b6d4", "#d946ef"];
 const AG_CTX_BUCKETS = [
   { id: "corta", label: "sotto 100k", max: 100000 },

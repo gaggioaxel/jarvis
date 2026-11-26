@@ -94,6 +94,11 @@ DEFAULTS = {
         # è codice) e file che non contano (accetta * e ~): memoria e piani di Claude, file generati.
         "righe_doc": [".md", ".txt", ".rst", ".tex", ".adoc"],
         "righe_escludi": ["~/.claude/*", "/tmp/*", "*/package-lock.json", "*.lock", "*.min.js", "*.min.css"],
+        # Combinazioni di modelli da provare a turno nelle chat di codice finché ognuna ha 8 chat con codice
+        # (agenti_raccolta.py --combinazioni, letto ogni mattina dal buongiorno). Etichette come nella scheda;
+        # Gemini passa sempre da un sottoagente Haiku, che quindi compare nella combinazione.
+        "combinazioni_obiettivo": ["Opus high da solo", "Opus high + Sonnet", "Opus high + Haiku",
+                                   "Opus medium + Haiku", "Opus medium + Gemini Neon + Haiku"],
     },
 }
 

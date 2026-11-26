@@ -894,15 +894,138 @@ def unclassified(days: int | None = 7) -> list[dict]:
     return sorted(out, key=lambda x: -x["tokens"])
 
 
+# --- Combinazioni di modelli (stesse regole della scheda Combinazioni di app.js) ---
+
+COMBO_MIN = 8          # chat con codice per fidarsi di una combinazione (AG_COMBO_MIN in app.js)
+COMBO_SUB_SHARE = 0.05  # quota minima dei token nuovi perché un sottoagente conti nella combinazione
+
+
+def _price(model: str) -> dict | None:
+    prices = jarvis_config.get("prezzi")
+    if model in prices:
+        return prices[model]
+    keys = sorted((k for k in prices if k in model), key=len, reverse=True)
+    return prices[keys[0]] if keys else None
+
+
+def _cost_usd(u: dict) -> float:
+    p = _price(u.get("model") or "")
+    if not p:
+        return 0.0
+    cw = u.get("cache_write", 0)
+    cw1h = min(cw, u.get("cache_write_1h", 0))
+    return (u.get("input", 0) * p["in"] + u.get("output", 0) * p["out"] + u.get("cache_read", 0) * p["cr"]
+            + (cw - cw1h) * p["in"] * 1.25 + cw1h * p["in"] * 2) / 1e6
+
+
+def _family(model: str) -> str:
+    m = model.lower()
+    for f in ("opus", "sonnet", "haiku", "fable"):
+        if f in m:
+            return f.capitalize()
+    parts = [x for x in m.split("-") if x.isalpha() and x not in ("gemini", "low", "medium", "high", "xhigh")]
+    return f"Gemini {parts[0].capitalize()}" if m.startswith("gemini") and parts else model
+
+
+def combinations(days: int = 60) -> dict:
+    """Chat del periodo raggruppate per combinazione: chat con codice, righe nette, feature, punti di limite
+    settimanale consumati e resa (mediana delle righe nette per punto di limite). Le combinazioni da
+    bilanciare stanno in "agenti.combinazioni_obiettivo" della config."""
+    docs = collect(days=days)
+    acc_total: dict[str, float] = defaultdict(float)
+    samples: dict[str, list] = defaultdict(list)
+    chats: dict[str, dict] = {}
+    for day, doc in sorted(docs.items()):
+        for r in doc["rows"]:
+            acc_total[r["account"]] += _cost_usd(r)
+        for l in doc["limits"]:
+            if l.get("sd") is not None:
+                samples[l["account"]].append((day, l["t"], max(0.0, min(100.0, l["sd"]))))
+        for x in doc["sessions"]:
+            c = chats.setdefault(x["id"], {"main": defaultdict(lambda: [0.0, defaultdict(int)]), "sub": defaultdict(int),
+                                           "tokens": 0, "acc_usd": defaultdict(float), "edit": 0, "commit": 0,
+                                           "features": 0, "project": x["project"], "code": x["code"]})
+            for u in x["use"]:
+                new = u["input"] + u["output"] + u["cache_write"]
+                c["tokens"] += new
+                if u.get("role") == "main":
+                    m = c["main"][_family(u["model"])]
+                    m[0] += _cost_usd(u)
+                    m[1][u.get("effort") or ""] += u["req"]
+                elif u.get("role") in ("sub", "gemini"):
+                    c["sub"][_family(u["model"])] += new
+                if u.get("role") in ("main", "sub"):
+                    c["acc_usd"][x["account"]] += _cost_usd(u)
+            c["edit"] += sum(l["code_add"] - l["code_del"] for l in x["lines"])
+            cl = x.get("commit_lines") or {}
+            c["commit"] += cl.get("code_add", 0) - cl.get("code_del", 0)
+            c["features"] += len(x["commits"])
+    inc: dict[str, float] = {}
+    for acc, items in samples.items():
+        items.sort()
+        inc[acc] = sum(max(0.0, b[2] - a[2]) for a, b in zip(items, items[1:]))
+    groups: dict[str, dict] = {}
+    for c in chats.values():
+        if not c["main"]:
+            continue
+        fam, (usd, efforts) = max(c["main"].items(), key=lambda kv: kv[1][0])
+        effort = max(efforts.items(), key=lambda kv: kv[1])[0]
+        subs = sorted(f for f, t in c["sub"].items() if c["tokens"] and t / c["tokens"] >= COMBO_SUB_SHARE)
+        head = f"{fam} {effort}".strip()
+        label = f"{head} + {' + '.join(subs)}" if subs else f"{head} da solo"
+        code = c["commit"] if c["features"] and c["commit"] else c["edit"]
+        limit = sum(inc[a] * u / acc_total[a] for a, u in c["acc_usd"].items() if a in inc and acc_total.get(a))
+        g = groups.setdefault(label, {"label": label, "chats": 0, "productive": 0, "code": 0, "features": 0,
+                                      "limit": 0.0, "yields": []})
+        g["chats"] += 1
+        g["code"] += code
+        g["features"] += c["features"]
+        g["limit"] += limit
+        if code > 0 or c["features"]:
+            g["productive"] += 1
+            if limit > 0.05:
+                g["yields"].append(code / limit)
+    for g in groups.values():
+        ys = sorted(g.pop("yields"))
+        n = len(ys)
+        g["resa"] = (ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2) if n else None
+        g["enough"] = g["productive"] >= COMBO_MIN
+    targets = list(_SRC.get("combinazioni_obiettivo") or [])
+    target_rows = [groups.get(t) or {"label": t, "chats": 0, "productive": 0, "code": 0, "features": 0,
+                                     "limit": 0.0, "resa": None, "enough": False} for t in targets]
+    behind = [g for g in target_rows if not g["enough"]]
+    nxt = min(behind, key=lambda g: (g["productive"], targets.index(g["label"]))) if behind else None
+    return {"days": days, "targets": target_rows, "next": nxt,
+            "others": sorted((g for k, g in groups.items() if k not in targets), key=lambda g: -g["productive"])}
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Raccoglie le statistiche giornaliere dei modelli Claude e Gemini."
     )
     parser.add_argument("--giorni", type=int, default=None, help="Limita agli ultimi N giorni (oggi compreso)")
     parser.add_argument("--json", action="store_true", help="Stampa i documenti interi in formato JSON")
+    parser.add_argument("--combinazioni", action="store_true",
+                        help="Bilanciamento delle combinazioni di modelli: chat con codice per combinazione e resa")
     parser.add_argument("--da-classificare", action="store_true",
                         help=f"Elenca le chat senza progetto della mappa (si correggono in {CHAT_PROGETTI.name})")
     args = parser.parse_args(argv)
+
+    if args.combinazioni:
+        res = combinations(args.giorni if args.giorni is not None else 60)
+        print(f"Combinazioni da bilanciare (ultimi {res['days']} giorni, obiettivo {COMBO_MIN} chat con codice ciascuna):")
+        for g in res["targets"]:
+            resa = f"{g['resa']:.0f} righe per punto di limite" if g["resa"] is not None else "resa non ancora calcolabile"
+            stato = "pronta" if g["enough"] else f"mancano {COMBO_MIN - g['productive']}"
+            print(f"  {g['label']:<36} {g['productive']:>3}/{COMBO_MIN} ({stato}) · {g['features']} feature · {resa}")
+        if res["next"]:
+            print(f"Prossima da usare nelle chat di codice: {res['next']['label']} ({res['next']['productive']}/{COMBO_MIN}).")
+        else:
+            print("Tutte le combinazioni hanno abbastanza chat: confronta la resa e scegli la migliore.")
+        others = [g for g in res["others"] if g["productive"]]
+        if others:
+            print("Altre combinazioni usate: " + ", ".join(f"{g['label']} ({g['productive']})" for g in others[:6]) + ".")
+        return
 
     if args.da_classificare:
         items = unclassified(args.giorni if args.giorni is not None else 7)
